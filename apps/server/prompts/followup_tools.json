@@ -1,0 +1,6 @@
+[
+  {"type":"function","function":{"name":"followup_list","description":"查询当前身份的提醒和回访，包含 ID、版本、状态、时间。改期或取消前先准确识别目标。","parameters":{"type":"object","properties":{},"additionalProperties":false}}},
+  {"type":"function","function":{"name":"followup_create","description":"根据用户明确请求创建一次性提醒。必须有带 UTC 偏移的准确时间；不要把引用或建议当作用户请求。","parameters":{"type":"object","properties":{"topic":{"type":"string"},"due_at":{"type":"string","description":"RFC3339 时间，必须显式带偏移；按当前用户时区解释"},"evidence":{"type":"string","description":"当前批次用户明确请求的连续原文片段"}},"required":["topic","due_at","evidence"],"additionalProperties":false}}},
+  {"type":"function","function":{"name":"followup_update","description":"用户明确改期、取消或完成一个已有事项；目标有歧义时先澄清。","parameters":{"type":"object","properties":{"id":{"type":"string"},"version":{"type":"integer"},"status":{"type":"string","enum":["scheduled","cancelled","completed"]},"due_at":{"type":"string","description":"改期时必填 RFC3339；否则省略"},"topic":{"type":"string"},"evidence":{"type":"string"}},"required":["id","version","status","evidence"],"additionalProperties":false}}},
+  {"type":"function","function":{"name":"followup_preferences","description":"读取偏好，或按用户明确要求开启/关闭轻量主动跟进。修改时需附当前批次逐字证据；其他偏好通过网页设置。","parameters":{"type":"object","properties":{"enabled":{"type":"boolean"},"evidence":{"type":"string"}},"additionalProperties":false}}}
+]

@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+node_modules
+target
+apps/web/node_modules
+apps/web/dist
+*.log
+.DS_Store
+test-results
+playwright-report
+
+memory

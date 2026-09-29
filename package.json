@@ -1,0 +1,25 @@
+{
+  "name": "orbit",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @orbit/web",
+    "build": "npm run build --workspace @orbit/web",
+    "check": "npm run check --workspace @orbit/web",
+    "test": "cargo test --workspace",
+    "test:integration": "cargo test -p orbit-server --test integration -- --ignored --test-threads=1",
+    "format": "prettier --write apps/web/src apps/web/vite.config.ts",
+    "format:check": "prettier --check apps/web/src apps/web/vite.config.ts",
+    "format:rust": "cargo fmt --all",
+    "format:rust:check": "cargo fmt --all -- --check",
+    "lint:rust": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+  },
+  "devDependencies": {
+    "prettier": "^3.9.9"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

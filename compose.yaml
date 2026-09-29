@@ -1,0 +1,22 @@
+name: orbit
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: deploy/postgres.Dockerfile
+    image: orbit-postgres-vector:17
+    environment:
+      POSTGRES_USER: orbit
+      POSTGRES_PASSWORD: orbit_local
+      POSTGRES_DB: orbit
+    ports:
+      - '127.0.0.1:55433:5432'
+    volumes:
+      - orbit-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U orbit -d orbit']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  orbit-data:

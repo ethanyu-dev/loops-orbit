@@ -1,0 +1,5 @@
+# 仅使用 stable 配置；SQL 与自定义宏仍需保持可读的源代码结构。
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+newline_style = "Unix"

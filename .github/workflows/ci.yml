@@ -1,0 +1,46 @@
+name: verify
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_USER: orbit
+          POSTGRES_PASSWORD: orbit_test
+          POSTGRES_DB: orbit_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U orbit -d orbit_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://orbit:orbit_test@localhost:5432/orbit_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm run build
+      - run: npm run format:check
+      - run: cargo fmt --all -- --check
+      - run: npm run lint:rust
+      - run: cargo test --workspace --locked
+      - run: npm run test:integration
+      - name: Build deployment image
+        run: docker build --tag orbit:ci .

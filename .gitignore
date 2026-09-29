@@ -1,0 +1,13 @@
+/target/
+node_modules/
+apps/web/dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+/playwright-report/
+/test-results/
+*.tsbuildinfo
+
+/memory/

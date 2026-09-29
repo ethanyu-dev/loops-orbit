@@ -1,0 +1,5 @@
+# 与 CI 和 Docker 固定同一个稳定版，保证格式化结果一致。
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
