@@ -48,7 +48,7 @@ export function ConnectionCard({
               ? `你好，${data.connection.name}`
               : '让重要的沟通，\n成为下一次对话的背景。'}
           </h2>
-          <p>连接飞书，选择你想整理的会话。Orbit 会记下讨论中的决定和待办，让每次回答都有来处。</p>
+          <p>连接飞书，自动订阅今后的沟通。Orbit 会记下讨论中的决定和待办，让每次回答都有来处。</p>
           {data.connection?.status === 'reauthorize' && (
             <p className="login-error" role="alert">
               授权已失效，采集已暂停。请重新授权后继续。
@@ -68,7 +68,7 @@ export function ConnectionCard({
           </div>
           <span className="connection-assurance">
             <ShieldCheck size={14} />
-            仅在你授权并选择会话后开始整理
+            授权后自动同步新消息，历史范围由你选择
           </span>
         </div>
         <div className="connection-visual" aria-hidden="true">
@@ -92,7 +92,7 @@ export function ConnectionCard({
       <div className="connection-steps" aria-label="连接步骤">
         {[
           ['01', '授权你的账号', '由你决定 Orbit 能访问什么。'],
-          ['02', '选择重要会话', '按需选择单聊、群聊和回溯范围。'],
+          ['02', '新消息自动同步', '历史消息按需选择日期整理。'],
           ['03', '接着聊下去', '约每 10 分钟同步，保留原话出处。'],
         ].map(([number, title, description], index) => (
           <div key={number} className="connection-step">
@@ -114,7 +114,7 @@ export function ConnectionCard({
           <div>
             <h3>你始终掌握范围</h3>
             <p>
-              只读取选定会话，资料供此管理员工作空间及同一飞书账号使用，不向其他访客开放。文字会交给已配置的模型整理；图片、文件和语音不自动下载。你可以暂停来源或遗忘资料。
+              自动收集授权范围内可发现、可读取会话的新消息，历史由你选择日期补录。资料仅供此管理员工作空间及同一飞书账号使用。文字和可访问的图片交给已配置的多模态模型整理，图片资源按需读取，不公开带授权的链接；文件和语音暂不解析。你可以暂停或移除会话。
             </p>
           </div>
           <div>

@@ -1,3 +1,4 @@
+mod subscription_tests;
 use super::*;
 use axum::{
     extract::{Query, State},
@@ -22,7 +23,9 @@ struct Fixture {
     forged: bool,
     /// OAuth 刷新调用次数。
     refreshes: usize,
-    /// 自然日保持一致的测试时间。
+    /// 将第一页改为图片消息，验证下载和多模态派生流程。
+    image: bool,
+    /// 自然日保持一致的测试时间.
     base: i64,
 }
 /// 为一个已有数据库夹具接入独立只读飞书协议服务器。
@@ -36,6 +39,7 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         recalled: false,
         forged: false,
         refreshes: 0,
+        image: false,
         base: chrono::Utc::now()
             .date_naive()
             .and_hms_opt(0, 0, 0)
@@ -50,6 +54,11 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         Json(json!({"code":0,"access_token":"fixture-user-access","refresh_token":"fixture-user-refresh","expires_in":7200,"refresh_token_expires_in":86400}))
     })).route("/authen/v1/user_info",get(||async {Json(json!({"code":0,"data":{"open_id":"ou_allowed","name":"本地测试账号"}}))}))
     .route("/im/v1/chats",get(||async {Json(json!({"code":0,"data":{"items":[{"chat_id":"oc_fixture","name":"测试沟通","chat_mode":"p2p"}],"has_more":false,"page_token":""}}))}))
+    .route("/im/v1/chats/oc_fixture/members",get(||async {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_other","name":"小林"}],"has_more":false}}))}))
+    .route("/im/v1/messages/om_me/resources/img_fixture",get(|headers:HeaderMap|async move {
+        assert_eq!(headers["authorization"],"Bearer fixture-user-access");
+        ([("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
+    }))
     .route("/im/v1/messages",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap,Query(query):Query<HashMap<String,String>>|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");
         let slow={let mut fixture=fixture.lock().unwrap();fixture.reads+=1;fixture.slow};
@@ -59,7 +68,7 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         if fixture.fail_second && second {return Json(json!({"code":999,"data":{}}));}
         let text=if second {"我来整理散步调研材料"} else if fixture.forged {"伪造证据：我来整理材料"} else if fixture.edited {"材料计划取消，先等反馈"} else {"我明天把材料发给你"};
         let deleted=fixture.recalled && !second;
-        Json(json!({"code":0,"data":{"items":[{"message_id":if second {"om_other"} else {"om_me"},"chat_id":"oc_fixture","sender":{"id":if second {"ou_other"} else {"ou_allowed"},"id_type":"open_id","sender_type":"user"},"create_time":(fixture.base+if second {1000} else {0}).to_string(),"update_time":(fixture.base+if fixture.edited || fixture.recalled {2000} else {0}).to_string(),"msg_type":"text","deleted":deleted,"body":{"content":json!({"text":text}).to_string()}}],"has_more":!second,"page_token":if second {""} else {"second"}}}))
+        Json(json!({"code":0,"data":{"items":[{"message_id":if second {"om_other"} else {"om_me"},"chat_id":"oc_fixture","sender":{"id":if second {"ou_other"} else {"ou_allowed"},"id_type":"open_id","sender_type":"user"},"create_time":(fixture.base+if second {1000} else {0}).to_string(),"update_time":(fixture.base+if fixture.edited || fixture.recalled {2000} else {0}).to_string(),"msg_type":if fixture.image && !second {"image"} else {"text"},"deleted":deleted,"body":{"content":if fixture.image && !second {json!({"image_key":"img_fixture"}).to_string()} else {json!({"text":text}).to_string()}}}],"has_more":!second,"page_token":if second {""} else {"second"}}}))
     })).with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -345,9 +354,11 @@ async fn retrieval_is_scoped_and_used_as_external_evidence() {
                     .as_array()
                     .is_some_and(|messages| messages.iter().any(|m| m["content"]
                         .as_str()
-                        .is_some_and(
-                            |s| s.contains("沟通资料检索结果") && s.contains("om_other")
-                        ))))
+                        .is_some_and(|s| s.contains("沟通资料检索结果")
+                            && s.contains("小林")
+                            && s.contains("source_url")
+                            && !s.contains("om_other")
+                            && !s.contains("ou_other")))))
         );
     }
     let (_, _, link) = h

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
+import { HistoryImport } from './HistoryImport';
 import { SourcePicker } from './SourcePicker';
 import { ConnectionCard } from './ConnectionCard';
 import { Spinner } from '../../components/Feedback';
@@ -85,8 +86,8 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
         : source.window_end
           ? '正在分页同步…'
           : source.last_synced_at
-            ? `最近同步 ${new Date(source.last_synced_at).toLocaleString()}`
-            : '等待首次同步';
+            ? `消息拉取完成于 ${new Date(source.last_synced_at).toLocaleString()}`
+            : '等待拉取新消息';
   }
   return (
     <div className="settings-page communication-page">
@@ -124,15 +125,64 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
           />
           {data.connection && (
             <>
-              <SourcePicker report={report} onAdded={load} />
               <section className="settings-card communication-card">
-                <h2>已选择的会话 · {data.sources.length}/20</h2>
-                {!data.sources.length && <p>还没有选择会话，当前不会采集聊天记录。</p>}
+                <h2>自动订阅新消息</h2>
+                <p>
+                  自动发现授权范围内的单聊和群聊，约每 10
+                  分钟同步新增消息。已移除的会话不会自动加回。
+                </p>
+                <label className="subscription-switch">
+                  <input
+                    type="checkbox"
+                    checked={data.connection.auto_subscribe}
+                    disabled={busy}
+                    onChange={(e) =>
+                      void change('/settings', 'PUT', { auto_subscribe: e.target.checked })
+                    }
+                  />
+                  自动订阅新发现的会话
+                </label>
+                <p>
+                  从 {new Date(data.connection.subscription_since * 1000).toLocaleString()}{' '}
+                  起收集新消息。关闭自动发现后，已有订阅仍继续同步，可在下方逐个暂停。
+                </p>
+                {data.connection.discovery_error && (
+                  <p role="alert">会话发现暂时失败，将自动重试。请检查飞书授权。</p>
+                )}
+              </section>
+              <HistoryImport data={data} reload={load} report={report} />
+              <details className="connection-details">
+                <summary>手动补充订阅</summary>
+                <SourcePicker report={report} onAdded={load} />
+              </details>
+              <section className="settings-card communication-card">
+                <h2>已订阅会话 · {data.sources.length}</h2>
+                {!data.sources.length && <p>等待发现可访问的会话，也可以手动补充订阅。</p>}
                 {data.sources.map((source) => (
                   <article className="communication-evidence" key={source.id}>
                     <strong>{source.label}</strong>
                     <p>{status(source)}</p>
-                    <div className="communication-row">
+                    {data.progress
+                      .filter((p) => p.source_id === source.id)
+                      .map((p) => (
+                        <div className="source-progress" key={p.source_id}>
+                          <span>
+                            文字资料可用 {p.ready}/{p.total} 天
+                          </span>
+                          {p.summarizing > 0 && <span>待整理 {p.summarizing} 天</span>}
+                          {p.indexing > 0 && <span>索引处理中 {p.indexing} 天</span>}
+                          {p.errors > 0 && (
+                            <span className="error-text">整理失败 {p.errors} 天</span>
+                          )}
+                          {p.images > 0 && (
+                            <span>
+                              图片解读 {p.images_ready}/{p.images}
+                              {p.images_failed > 0 ? ` · ${p.images_failed} 张失败重试中` : ''}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    <div className="source-actions">
                       <button
                         disabled={busy}
                         onClick={() =>
@@ -142,30 +192,37 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                           })
                         }
                       >
-                        {source.enabled ? '暂停' : '恢复'}
+                        {source.enabled ? '暂停同步与检索' : '恢复同步与检索'}
                       </button>
                       <button
                         disabled={busy || !source.enabled}
                         onClick={() => void change(`/sources/${source.id}/sync`, 'POST')}
                       >
-                        立即同步
+                        同步最新消息
                       </button>
-                      <button disabled={busy} onClick={() => setConfirmation(source.id)}>
-                        遗忘此会话
-                      </button>
+                      <details className="source-more">
+                        <summary>更多</summary>
+                        <button
+                          className="danger-action"
+                          disabled={busy}
+                          onClick={() => setConfirmation(source.id)}
+                        >
+                          移除会话并删除资料
+                        </button>
+                      </details>
                     </div>
                   </article>
                 ))}
               </section>
               {confirmation && (
                 <section className="settings-card communication-card" role="alert">
-                  <h2>遗忘这些资料？</h2>
+                  <h2>移除并删除资料？</h2>
                   <p>
                     会删除
                     {confirmation === 'connection'
                       ? '所有导入资料和本地授权凭证'
-                      : '此会话的原文、摘要和检索索引'}
-                    ，并停止依赖这些资料的提醒。已发送的聊天记录仍可查看，相关旧上下文会停止参与后续回答。
+                      : '此会话的原文、图片解读、摘要和检索索引'}
+                    ，并停止依赖这些资料的提醒。移除的会话不会被自动订阅加回，飞书中的原始消息不受影响。已发送的聊天记录仍可查看，相关旧上下文会停止参与后续回答。
                   </p>
                   <button
                     disabled={busy}
@@ -176,7 +233,7 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                       )
                     }
                   >
-                    确认遗忘
+                    确认删除资料
                   </button>
                   <button onClick={() => setConfirmation(null)}>取消</button>
                 </section>

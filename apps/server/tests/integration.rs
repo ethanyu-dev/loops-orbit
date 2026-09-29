@@ -77,6 +77,12 @@ impl Harness {
                 let captured = captured.clone();
                 async move {
                     captured.lock().unwrap().push(body.clone());
+                    // 图片夹具只验证多模态请求形状，不代表实际模型的识别质量。
+                    if body["messages"][0]["content"].as_str().unwrap().contains("阅读聊天消息附带的图片") {
+                        assert!(body["messages"][1]["content"][1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+                        assert!(body.get("tools").is_none());
+                        return Json(json!({"choices":[{"message":{"content":"图片中的订单状态为等待付款，金额 128 元。"}}]})).into_response();
+                    }
                     let text = body["messages"].as_array().unwrap().last().unwrap()["content"]
                         .as_str()
                         .unwrap()

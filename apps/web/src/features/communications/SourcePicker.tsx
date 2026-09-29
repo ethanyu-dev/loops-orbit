@@ -19,7 +19,6 @@ export function SourcePicker({
   const [more, setMore] = useState(true);
   const [chatId, setChatId] = useState('');
   const [label, setLabel] = useState('');
-  const [days, setDays] = useState(7);
   const [busy, setBusy] = useState(false);
   /** 去重累积当前账号可见列表，不预选任何会话。 */
   async function load() {
@@ -39,14 +38,14 @@ export function SourcePicker({
       setBusy(false);
     }
   }
-  /** 明确提交单个会话及回溯范围后，服务端才创建采集任务。 */
+  /** 手动补充订阅只从当前时刻开始，历史补录独立提交。 */
   async function add(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
       await api('/communications/sources', {
         method: 'POST',
-        body: JSON.stringify({ chat_id: chatId, label, days }),
+        body: JSON.stringify({ chat_id: chatId, label }),
       });
       setChatId('');
       setLabel('');
@@ -59,8 +58,8 @@ export function SourcePicker({
   }
   return (
     <section className="settings-card communication-card">
-      <h2>选择要整理的会话</h2>
-      <p>仅采集你选中的单聊或群聊。首次可回溯 1–30 天，之后约每 10 分钟同步。</p>
+      <h2>补充订阅会话</h2>
+      <p>自动发现尚未找到的会话，可以在这里手动补充。从现在开始同步，旧消息请使用历史整理。</p>
       <button disabled={busy || !more} onClick={() => void load()}>
         {chats.length ? (more ? '加载更多会话' : '已加载全部可见会话') : '加载我的会话'}
       </button>
@@ -104,19 +103,8 @@ export function SourcePicker({
             placeholder="例如：产品讨论 / 与小林的沟通"
           />
         </label>
-        <label>
-          首次回溯天数
-          <input
-            type="number"
-            min="1"
-            max="30"
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            required
-          />
-        </label>
         <button className="primary" disabled={busy}>
-          开始整理这个会话
+          订阅新消息
         </button>
       </form>
     </section>

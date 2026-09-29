@@ -88,7 +88,7 @@ export function DocumentView({
           {detail.summary && (
             <p>
               共 {detail.summary.message_count} 条记录；{detail.summary.unsupported_count}{' '}
-              条附件、无文本或超长消息未参与摘要。
+              条消息未参与文字摘要；图片解读在对应原始记录下单独展示。
             </p>
           )}
           {detail.summary?.items.length === 0 && <p>这部分资料没有提取到明确事项。</p>}
@@ -98,8 +98,8 @@ export function DocumentView({
               <p>{value.text}</p>
               <blockquote>{value.quote}</blockquote>
               <small>
-                {value.is_me ? '我' : value.sender_id} ·{' '}
-                {new Date(value.create_time).toLocaleString()} · {value.message_id}
+                {value.sender_name || (value.is_me ? '我' : '会话成员')} ·{' '}
+                {new Date(value.create_time).toLocaleString()}
               </small>
               <button onClick={() => select(value, index)}>据此安排提醒</button>
             </article>
@@ -156,15 +156,33 @@ export function DocumentView({
           {detail.messages.map((message) => (
             <article key={message.message_id} className="communication-evidence">
               <small>
-                {message.is_me ? '我' : message.sender_id || '未知发送者'} ·{' '}
+                {message.sender_name || (message.is_me ? '我' : '会话成员')} ·{' '}
                 {new Date(message.create_time).toLocaleString()}
               </small>
               <p>
                 {message.deleted
                   ? '消息已撤回'
-                  : message.text || `［${message.message_type}：仅保留元数据］`}
+                  : message.text ||
+                    (message.images?.length
+                      ? '［图片消息］'
+                      : `［${message.message_type}：暂未解析］`)}
               </p>
-              <small>{message.message_id}</small>
+              {message.images?.map((image, index) => (
+                <div className="communication-image" key={image.url}>
+                  <a href={image.url} target="_blank" rel="noreferrer">
+                    查看原图 {message.images.length > 1 ? index + 1 : ''}
+                  </a>
+                  <p>
+                    {image.description
+                      ? `图片机器解读：${image.description}`
+                      : image.reference_only
+                        ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
+                        : image.error
+                          ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
+                          : '图片待解读，原图入口已保存。'}
+                  </p>
+                </div>
+              ))}
             </article>
           ))}
           <div className="communication-row">

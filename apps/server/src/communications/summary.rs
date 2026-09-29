@@ -43,7 +43,10 @@ pub struct Summary {
     pub message_count: usize,
     /// 没有可解析文本或超过单条预算的有效消息数量。
     pub unsupported_count: usize,
-    /// 已通过证据校验的整理条目。
+    /// 图片机器解读与逐字原话分开保存。
+    #[serde(default)]
+    pub image_notes: Vec<super::images::Note>,
+    /// 已通过证据校验的整理条目.
     pub items: Vec<Item>,
 }
 /// 校验出处存在、引文精确匹配、承诺归属一致，不声称机器校验能证明语义蕴含。
@@ -118,7 +121,7 @@ async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
         if message.deleted {
             continue;
         }
-        let size=serde_json::to_vec(&json!({"message_id":message.message_id,"sender_id":message.sender_id,"sender_type":message.sender_type,"is_me":message.is_me,"create_time":message.create_time,"text":message.text})).map_err(unavailable)?.len();
+        let size=serde_json::to_vec(&json!({"message_id":message.message_id,"sender_id":message.sender_id,"sender_name":message.display_name(),"sender_type":message.sender_type,"is_me":message.is_me,"create_time":message.create_time,"text":message.text})).map_err(unavailable)?.len();
         if message.text.trim().is_empty() || size > CHUNK_BYTES {
             unsupported += 1;
             continue;
@@ -132,7 +135,7 @@ async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
     }
     let mut items = vec![];
     for chunk in chunks {
-        let input:Vec<Value>=chunk.iter().map(|m| json!({"message_id":m.message_id,"sender_id":m.sender_id,"sender_type":m.sender_type,"is_me":m.is_me,"create_time":m.create_time,"text":m.text})).collect();
+        let input:Vec<Value>=chunk.iter().map(|m| json!({"message_id":m.message_id,"sender_id":m.sender_id,"sender_name":m.display_name(),"sender_type":m.sender_type,"is_me":m.is_me,"create_time":m.create_time,"text":m.text})).collect();
         let value = state
             .runtime
             .summarize_communications(&json!({"messages":input}))
@@ -151,7 +154,12 @@ async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
         }
         items.extend(candidates);
     }
+    let image_notes = {
+        let _guard = state.communications.lock().await;
+        super::images::notes(state, doc).await?
+    };
     let summary = Summary {
+        image_notes,
         raw_hash: doc.raw_hash.clone(),
         message_count: raw.len(),
         unsupported_count: unsupported,

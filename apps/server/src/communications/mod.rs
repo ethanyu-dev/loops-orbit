@@ -1,10 +1,13 @@
+mod calendar;
 mod client;
 mod crypto;
 pub(crate) mod dependencies;
+mod images;
 mod oauth;
 pub mod routes;
 pub(crate) mod search;
 pub(crate) mod store;
+pub mod subscription;
 pub(crate) mod summary;
 pub mod sync;
 /// 与聊天共用的身份隔离检索入口。
@@ -21,8 +24,8 @@ use uuid::Uuid;
 // 授权只申请只读会话及离线刷新，不申请以用户身份发送消息。
 const SCOPES: &str = "offline_access im:chat:read im:message:readonly im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user";
 const CALLBACK: &str = "/api/communications/oauth/callback";
-// 限定个人规模，避免误选大量会话或无限制拉取历史。
-pub(super) const MAX_SOURCES: i64 = 20;
+// 每次只处理一页，会话总量不再受手工选择上限限制。
+pub(super) const LOCAL_TIMEZONE: chrono_tz::Tz = chrono_tz::Asia::Shanghai;
 
 /// 采集显式启用；密钥与登录密钥独立，轮换后需要重新连接账号。
 #[derive(Clone)]
@@ -56,6 +59,8 @@ pub struct Source {
     pub chat_id: String,
     /// 用户可修改的展示名称。
     pub label: String,
+    /// 日文件使用的时区，旧 UTC 文件由后台迁移。
+    pub day_timezone: String,
     /// 暂停后不采集、不召回、不支持旧跟进。
     pub enabled: bool,
     /// 变更围栏，用于丢弃在途采集结果。
@@ -80,7 +85,7 @@ pub struct Source {
     /// 脱敏故障分类。
     pub error: Option<String>,
 }
-pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
+pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,day_timezone,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
 
 /// 当前文件指针；正文读取时仍要校验哈希。
 #[derive(Clone, Serialize, sqlx::FromRow)]
@@ -89,7 +94,7 @@ pub struct Document {
     pub id: Uuid,
     /// 所属白名单会话。
     pub source_id: Uuid,
-    /// UTC 自然日。
+    /// 按来源时区划分的自然日。
     pub day: String,
     /// 原文内容指纹。
     pub raw_hash: String,

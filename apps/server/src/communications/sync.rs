@@ -2,7 +2,7 @@ use super::{
     DOCUMENT_COLUMNS, Document, SOURCE_COLUMNS, Source, client, dependencies, store, unavailable,
 };
 use crate::{AppState, error::ApiResult};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Duration};
 use tokio::sync::watch;
@@ -16,11 +16,14 @@ const MAX_MESSAGE_BYTES: usize = 128 * 1024;
 
 /// 独立采集 worker 不创建 runs，不发送聊天回复；每次一页给其他来源留出机会。
 pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
-    // 三条独立循环共享关闭信号，慢摘要或 embedding 不阻塞消息同步。
+    // 独立循环共享关闭信号，慢摘要或 embedding 不阻塞消息同步。
     tokio::join!(
         work_loop(&state, stop.clone(), 0),
         work_loop(&state, stop.clone(), 1),
-        work_loop(&state, stop, 2)
+        work_loop(&state, stop.clone(), 2),
+        work_loop(&state, stop.clone(), 3),
+        work_loop(&state, stop.clone(), 4),
+        work_loop(&state, stop, 5)
     );
 }
 /// 每条循环只执行一种工作；故障统一退避，避免上游中断时快速重试。
@@ -35,7 +38,10 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
                 match kind {
                     0 => step(state).await.map(|_| ()),
                     1 => super::summary::step(state).await.map(|_| ()),
-                    _ => super::search::index_step(state).await,
+                    2 => super::search::index_step(state).await,
+                    3 => super::subscription::discover(state).await,
+                    4 => super::subscription::history_step(state).await,
+                    _ => super::images::step(state).await,
                 }
             };
             let result = tokio::select! { result=work=>result, _=stop.changed()=>return };
@@ -50,8 +56,9 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
 /// 公共单步入口供真实 worker 和协议夹具共用，不使用伪造聊天队列。
 pub async fn step(state: &AppState) -> ApiResult<bool> {
     super::configured(state)?;
+    super::calendar::migrate(state).await?;
     let sql = format!(
-        "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE enabled AND next_sync<=now() AND EXISTS(SELECT 1 FROM communication_connections WHERE status='active') ORDER BY next_sync,id LIMIT 1"
+        "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE enabled AND day_timezone='Asia/Shanghai' AND next_sync<=now() AND EXISTS(SELECT 1 FROM communication_connections WHERE status='active') ORDER BY next_sync,id LIMIT 1"
     );
     let Some(mut source): Option<Source> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_optional(&state.pool)
@@ -72,7 +79,7 @@ pub async fn step(state: &AppState) -> ApiResult<bool> {
         });
         source.window_end = Some(now.max(source.window_start.unwrap_or(now) + 1));
     }
-    let result = page(state, &source, &open_id, connection_version).await;
+    let result = page(state, &source, &open_id, connection_version, None).await;
     if let Err(error) = result {
         // 页令牌可能已过期。失败重试从同一固定窗口首部开始，时间水位仍不前进。
         sqlx::query("UPDATE communication_sources SET error=$2,next_sync=now()+make_interval(secs=>$3),page_token='' WHERE id=$1 AND version=$4")
@@ -81,11 +88,12 @@ pub async fn step(state: &AppState) -> ApiResult<bool> {
     Ok(true)
 }
 /// 只有完整、可解析的一页才进入提交路径，错误响应或重复令牌不移动水位。
-async fn page(
+pub(super) async fn page(
     state: &AppState,
     source: &Source,
     open_id: &str,
     connection_version: i64,
+    history_job: Option<Uuid>,
 ) -> ApiResult<()> {
     let token = client::access(state).await?;
     let data = client::json_response(client::get(state, "/im/v1/messages", &token).query(&[
@@ -117,16 +125,40 @@ async fn page(
     if more && (next.is_empty() || next == source.page_token || next.len() > 16384) {
         return Err(unavailable("无效分页状态"));
     }
+    // 姓名接口权限不足时仍同步正文，缺失身份显示为会话成员。
+    let names = client::json_response(
+        client::get(
+            state,
+            &format!("/im/v1/chats/{}/members", source.chat_id),
+            &token,
+        )
+        .query(&[("member_id_type", "open_id"), ("page_size", "100")]),
+    )
+    .await
+    .ok();
     let mut days: BTreeMap<String, Vec<store::Message>> = BTreeMap::new();
     for item in items {
-        let message = normalize(item, &source.chat_id, open_id)?;
-        if message.create_time / 1000 < source.start_at {
+        let mut message = normalize(item, &source.chat_id, open_id)?;
+        if message.sender_name.is_empty()
+            && message.sender_id_type == "open_id"
+            && let Some(name) = names
+                .as_ref()
+                .and_then(|v| v["data"]["items"].as_array())
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|v| v["member_id"].as_str() == Some(&message.sender_id))
+                })
+                .and_then(|v| v["name"].as_str())
+        {
+            message.sender_name = name.chars().take(120).collect();
+        }
+        if message.create_time / 1000 < source.window_start.unwrap_or(source.start_at)
+            || message.create_time / 1000 >= source.window_end.unwrap_or(i64::MAX)
+        {
             continue;
         }
-        let day = DateTime::from_timestamp_millis(message.create_time)
-            .ok_or_else(|| unavailable("错误消息时间"))?
-            .format("%Y-%m-%d")
-            .to_string();
+        let day = super::calendar::day(message.create_time)?;
         days.entry(day).or_default().push(message);
     }
     let _guard = state.communications.lock().await;
@@ -137,12 +169,16 @@ async fn page(
     for (day, messages) in days {
         commit_day(state, source, &day, messages).await?;
     }
-    sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")
+    if let Some(job) = history_job {
+        sqlx::query("UPDATE communication_history_jobs SET page_token=$2,status=$3,error=NULL,next_attempt=now()+CASE WHEN $3='complete' THEN interval '1 day' ELSE interval '2 seconds' END WHERE id=$1").bind(job).bind(if more {next} else {""}).bind(if more {"running"} else {"complete"}).execute(&state.pool).await?;
+    } else {
+        sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")
         .bind(source.id).bind(if more {source.window_start} else {None}).bind(if more {source.window_end} else {None}).bind(if more {next} else {""}).bind(more).bind(source.window_end.unwrap_or(source.watermark)).bind(if more {1.0} else {SYNC_SECONDS as f64}).bind(source.window_start==Some(source.start_at)).bind(source.version).execute(&state.pool).await?;
+    }
     Ok(())
 }
 /// 先写新快照、再提交指针、最后回收旧文件；页重放通过 message_id 幂等合并。
-async fn commit_day(
+pub(super) async fn commit_day(
     state: &AppState,
     source: &Source,
     day: &str,
@@ -176,8 +212,11 @@ async fn commit_day(
         .map(|m| (m.message_id.clone(), m))
         .collect();
     let mut corrected = false;
-    for message in messages {
+    for mut message in messages {
         if let Some(old) = merged.get(&message.message_id) {
+            if message.sender_name.is_empty() {
+                message.sender_name = old.sender_name.clone();
+            }
             if old.update_time > message.update_time && !message.deleted {
                 continue;
             }
@@ -200,6 +239,9 @@ async fn commit_day(
     document.raw_hash = store::write_raw(state, &document, &merged)?;
     document.version += 1;
     document.summary_hash = None;
+    for message in &merged {
+        sqlx::query("DELETE FROM communication_images WHERE source_id=$1 AND message_id=$2 AND (fingerprint<>$3 OR $4)").bind(source.id).bind(&message.message_id).bind(super::images::fingerprint(message)).bind(message.deleted).execute(&state.pool).await?;
+    }
     sqlx::query("INSERT INTO communication_documents(id,source_id,day,raw_hash,version) VALUES($1,$2,$3,$4,$5) ON CONFLICT(source_id,day) DO UPDATE SET raw_hash=excluded.raw_hash,version=excluded.version,summary_hash=NULL,summary_error=NULL,next_summary=now()")
         .bind(document.id).bind(source.id).bind(day).bind(&document.raw_hash).bind(document.version).execute(&state.pool).await?;
     super::search::remove_vector(state, document.id).await?;
@@ -253,6 +295,7 @@ fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResult<store::Me
         chat_id: chat_id.into(),
         is_me: sender_id_type == "open_id" && sender_type == "user" && sender_id == open_id,
         sender_id,
+        sender_name: value["sender"]["name"].as_str().unwrap_or("").to_owned(),
         sender_id_type,
         sender_type,
         create_time,

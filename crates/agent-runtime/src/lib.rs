@@ -212,6 +212,24 @@ impl Runtime {
             .map_err(|_| failure("invalid_followup_decision", true))
     }
 
+    /// 图片以真正的多模态内容块传入；不把私有资源链接伪装成模型已看过的图片。
+    pub async fn describe_communication_image(
+        &self,
+        text: &str,
+        data_url: &str,
+    ) -> Result<String, Failure> {
+        let messages = vec![
+            json!({"role":"system","content":include_str!("../prompts/communication_image.md")}),
+            json!({"role":"user","content":[{"type":"text","text":text.chars().take(2000).collect::<String>()},{"type":"image_url","image_url":{"url":data_url}}]}),
+        ];
+        let answer = self.complete(&messages, None, false).await?;
+        let text = answer["content"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or(failure("invalid_image_description", true))?;
+        Ok(text.chars().take(1500).collect())
+    }
+
     /// 沟通整理不提供工具；服务端另外验证发送者和逐字证据。
     pub async fn summarize_communications(&self, input: &Value) -> Result<Value, Failure> {
         let messages = vec![

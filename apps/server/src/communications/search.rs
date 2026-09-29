@@ -69,6 +69,12 @@ fn summary_entry(doc: &Document, summary: &Summary) -> Entry {
                     item.kind, item.sender_id, item.text, item.quote
                 )
             })
+            .chain(
+                summary
+                    .image_notes
+                    .iter()
+                    .filter_map(|n| n.description.clone()),
+            )
             .collect::<Vec<_>>()
             .join("\n")
             .chars()
@@ -98,10 +104,17 @@ pub async fn search(state: &AppState, owner: &str, query: &str) -> ApiResult<Vec
             if let Some(summary) = &summary {
                 summaries.insert(doc.id, summary_entry(&doc, summary));
             }
-            for message in raw
-                .into_iter()
-                .filter(|m| !m.deleted && !m.text.trim().is_empty())
-            {
+            let notes = super::images::notes(state, &doc).await?;
+            for message in raw.into_iter().filter(|m| !m.deleted) {
+                let visual = notes
+                    .iter()
+                    .filter(|n| n.message_id == message.message_id)
+                    .filter_map(|n| n.description.as_deref())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if message.text.trim().is_empty() && visual.is_empty() {
+                    continue;
+                }
                 let digest = hex::decode(auth::hash(&format!("{}:{}", doc.id, message.message_id)))
                     .expect("十六进制摘要");
                 let id = Uuid::from_bytes(digest[..16].try_into().expect("固定摘要长度"));
@@ -109,8 +122,11 @@ pub async fn search(state: &AppState, owner: &str, query: &str) -> ApiResult<Vec
                     id,
                     label.clone(),
                     format!(
-                        "{} {} {}",
-                        message.sender_id, message.create_time, message.text
+                        "{} {} {} {}",
+                        message.display_name(),
+                        message.create_time,
+                        message.text,
+                        visual
                     ),
                 ));
                 lookup.insert(id, (doc.id, message));
@@ -248,10 +264,38 @@ pub(crate) async fn context(
     if hits.is_empty() {
         return Ok(None);
     }
+    let _guard = state.communications.lock().await;
+    let current = documents(state).await?;
     let mut evidence = vec![];
     let mut bytes = 0;
     for hit in hits {
-        let value = json!({"document_id":hit.document.id,"version":hit.document.version,"source":hit.label,"day":hit.document.day,"messages":hit.messages.iter().map(|m|json!({"message_id":m.message_id,"sender_id":m.sender_id,"is_me":m.is_me,"time":m.create_time,"text":m.text.chars().take(1800).collect::<String>()})).collect::<Vec<_>>(),"summary":hit.summary.as_ref().map(|s|s.items.iter().take(8).collect::<Vec<_>>())});
+        if !current
+            .iter()
+            .any(|d| d.id == hit.document.id && d.version == hit.document.version)
+        {
+            continue;
+        }
+        let raw = store::raw(state, &hit.document)?;
+        let sender = |id: &str| {
+            raw.iter()
+                .find(|m| m.message_id == id)
+                .map(|m| m.display_name())
+                .unwrap_or("会话成员")
+        };
+        let time = |millis: i64| {
+            chrono::DateTime::from_timestamp_millis(millis)
+                .map(|t| t.with_timezone(&super::LOCAL_TIMEZONE).to_rfc3339())
+                .unwrap_or_default()
+        };
+        let link = format!(
+            "{}/?communication={}",
+            state.config.public_url, hit.document.id
+        );
+        let notes = super::images::notes(state, &hit.document).await?;
+        let value = json!({"document_id":hit.document.id,"version":hit.document.version,"source":hit.label,"day":hit.document.day,"source_url":link,
+            "messages":hit.messages.iter().map(|m|json!({"sender":m.display_name(),"is_me":m.is_me,"time":time(m.create_time),"text":m.text.chars().take(1800).collect::<String>()})).collect::<Vec<_>>(),
+            "summary":hit.summary.as_ref().map(|s|s.items.iter().enumerate().take(8).map(|(index,i)|json!({"item":index,"kind":i.kind,"text":i.text,"quote":i.quote,"sender":sender(&i.message_id),"is_me":i.is_me,"time":time(i.create_time)})).collect::<Vec<_>>()),
+            "image_interpretations":notes.iter().filter_map(|n|n.description.as_ref().map(|text|json!({"sender":sender(&n.message_id),"interpretation":text,"source_url":link}))).take(8).collect::<Vec<_>>()});
         let size = value.to_string().len();
         if bytes + size > 16000 {
             break;
@@ -260,4 +304,70 @@ pub(crate) async fn context(
         evidence.push(value);
     }
     Ok(Some(format!("{CONTEXT_PROMPT}\n{}", json!(evidence))))
+}
+
+/// 汇总完整来源的处理进度，不以最近一百份文件冒充总量。
+pub(super) async fn progress(state: &AppState) -> ApiResult<Vec<serde_json::Value>> {
+    let _guard = state.communications.lock().await;
+    let sources: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM communication_sources")
+        .fetch_all(&state.pool)
+        .await?;
+    let mut result = vec![];
+    for source in sources {
+        let docs: Vec<Document> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE source_id=$1"
+        )))
+        .bind(source)
+        .fetch_all(&state.pool)
+        .await?;
+        let (
+            mut ready,
+            mut summarizing,
+            mut indexing,
+            mut errors,
+            mut pictures,
+            mut image_ready,
+            mut image_failed,
+        ) = (0, 0, 0, 0, 0, 0, 0);
+        for doc in &docs {
+            let raw = match store::raw(state, doc) {
+                Ok(raw) => raw,
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
+            };
+            pictures += raw
+                .iter()
+                .map(|m| super::images::keys(m).len())
+                .sum::<usize>();
+            let notes = super::images::notes(state, doc).await?;
+            image_ready += notes.iter().filter(|n| n.description.is_some()).count();
+            image_failed += notes.iter().filter(|n| n.error.is_some()).count();
+            if doc.summary_error.is_some() {
+                errors += 1;
+                continue;
+            }
+            let Ok(summary) = store::summary(state, doc) else {
+                summarizing += 1;
+                continue;
+            };
+            let entry = summary_entry(doc, &summary);
+            let indexed = if entry.content.is_empty() {
+                true
+            } else if let Some(config) = state
+                .config
+                .memory
+                .as_ref()
+                .and_then(|m| m.embedding.as_ref())
+            {
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memory_vectors WHERE owner=$1 AND id=$2 AND content_hash=$3 AND version=$4)").bind(VECTOR_OWNER).bind(doc.id).bind(entry.hash()).bind(config.version()).fetch_one(&state.pool).await?
+            } else {
+                true
+            };
+            if indexed { ready += 1 } else { indexing += 1 }
+        }
+        result.push(json!({"source_id":source,"total":docs.len(),"ready":ready,"summarizing":summarizing,"indexing":indexing,"errors":errors,"images":pictures,"images_ready":image_ready,"images_failed":image_failed}));
+    }
+    Ok(result)
 }

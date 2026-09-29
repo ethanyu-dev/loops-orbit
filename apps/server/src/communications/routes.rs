@@ -1,6 +1,6 @@
 use super::{
-    AppState, DOCUMENT_COLUMNS, Document, MAX_SOURCES, SOURCE_COLUMNS, Source, client, configured,
-    dependencies, oauth, search, store, unavailable,
+    AppState, DOCUMENT_COLUMNS, Document, SOURCE_COLUMNS, Source, client, configured, dependencies,
+    oauth, search, store, unavailable,
 };
 use crate::{
     auth::Identity,
@@ -20,6 +20,15 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(index))
+        .route(
+            "/settings",
+            axum::routing::put(super::subscription::settings),
+        )
+        .route("/sources/{id}/history", post(super::subscription::history))
+        .route(
+            "/documents/{id}/images/{message_id}/{index}",
+            get(super::images::resource),
+        )
         .route("/oauth/start", post(oauth::start))
         .route("/oauth/callback", get(oauth::callback))
         .route("/connection", delete(disconnect))
@@ -33,8 +42,8 @@ pub fn router() -> Router<AppState> {
 /// 不向浏览器返回 OAuth 令牌、过期刷新凭证或内部分页令牌。
 async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<Json<Value>> {
     identity.require_admin()?;
-    let connection: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT open_id,name,status FROM communication_connections WHERE owner='admin'",
+    let connection: Option<(String, String, String, bool, i64, Option<String>)> = sqlx::query_as(
+        "SELECT open_id,name,status,auto_subscribe,subscription_since,discovery_error FROM communication_connections WHERE owner='admin'",
     )
     .fetch_optional(&state.pool)
     .await?;
@@ -48,11 +57,13 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     )))
     .fetch_all(&state.pool)
     .await?;
+    let jobs: Vec<super::subscription::HistoryJob> = sqlx::query_as("SELECT id,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs ORDER BY created_at DESC LIMIT 100").fetch_all(&state.pool).await?;
+    let progress = super::search::progress(&state).await?;
     Ok(Json(
-        json!({"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status)|json!({"open_id":open_id,"name":name,"status":status})),"sources":sources,"documents":documents}),
+        json!({"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
     ))
 }
-/// 浏览器按页加载可见会话；不能因为授权成功就自动将全部会话纳入采集。
+/// 浏览器按页加载可见会话，供手动补录历史或添加未自动发现的会话。
 #[derive(Deserialize)]
 struct ChatPage {
     /// 上游不透明游标。
@@ -94,7 +105,8 @@ struct Add {
     chat_id: String,
     /// 展示名，不用于文件路径。
     label: String,
-    /// 首次历史范围，1–30 天。
+    /// 兼容已有客户端；零表示仅从现在订阅，历史走独立任务。
+    #[serde(default)]
     days: i64,
 }
 async fn add(
@@ -112,7 +124,7 @@ async fn add(
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
         || input.label.trim().is_empty()
         || input.label.chars().count() > 120
-        || !(1..=30).contains(&input.days)
+        || !(0..=30).contains(&input.days)
     {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
@@ -120,12 +132,6 @@ async fn add(
         ));
     }
     let _guard = state.communications.lock().await;
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_sources")
-        .fetch_one(&state.pool)
-        .await?;
-    if count >= MAX_SOURCES {
-        return Err(ApiError(StatusCode::CONFLICT, "communication_source_limit"));
-    }
     let token = client::access(&state).await?;
     // 选择后验证该账号确实能够读取消息，权限错误不会进入无限重试队列。
     client::json_response(client::get(&state, "/im/v1/messages", &token).query(&[
@@ -134,9 +140,14 @@ async fn add(
         ("page_size", "1"),
     ]))
     .await?;
-    let start = chrono::Utc::now().timestamp() - input.days * 86400;
-    let id:Uuid=sqlx::query_scalar("INSERT INTO communication_sources(id,owner,chat_id,label,start_at,watermark) VALUES($1,'admin',$2,$3,$4,$4) ON CONFLICT(owner,chat_id) DO UPDATE SET label=excluded.label RETURNING id")
-        .bind(Uuid::new_v4()).bind(input.chat_id).bind(input.label.trim()).bind(start).fetch_one(&state.pool).await?;
+    let now = chrono::Utc::now().timestamp();
+    let start = now - input.days * 86400;
+    let id:Uuid=sqlx::query_scalar("INSERT INTO communication_sources(id,owner,chat_id,label,start_at,watermark,day_timezone) VALUES($1,'admin',$2,$3,$4,$4,'Asia/Shanghai') ON CONFLICT(owner,chat_id) DO UPDATE SET label=excluded.label RETURNING id")
+        .bind(Uuid::new_v4()).bind(&input.chat_id).bind(input.label.trim()).bind(start).fetch_one(&state.pool).await?;
+    sqlx::query("DELETE FROM communication_exclusions WHERE owner='admin' AND chat_id=$1")
+        .bind(input.chat_id)
+        .execute(&state.pool)
+        .await?;
     Ok(Json(json!({"id":id})))
 }
 /// 启停具有版本围栏，旧页面不能重新开启刚刚暂停的来源。
@@ -226,6 +237,7 @@ async fn remove(
     identity.require_admin()?;
     configured(&state)?;
     let _guard = state.communications.lock().await;
+    sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=$1 ON CONFLICT DO NOTHING").bind(id).execute(&state.pool).await?;
     forget(&state, id).await?;
     Ok(Json(json!({"ok":true})))
 }
@@ -271,8 +283,29 @@ async fn document(
         .await?
         .ok_or(ApiError(StatusCode::NOT_FOUND, "communication_not_found"))?;
     let raw = store::raw(&state, &doc)?;
+    let image_notes = super::images::notes(&state, &doc).await?;
+    let messages: Vec<_>=raw.iter().skip(page.offset).take(50).map(|m| {
+        let mut value=serde_json::to_value(m).expect("消息可序列化");
+        value["sender_name"]=json!(m.display_name());
+        value["images"]=json!(super::images::keys(m).iter().enumerate().map(|(index,key)|json!({"reference_only":index>=20,"url":format!("/api/communications/documents/{}/images/{}/{}",doc.id,m.message_id,index),"description":image_notes.iter().find(|n|n.message_id==m.message_id && n.image_key==*key).and_then(|n|n.description.as_ref()),"error":image_notes.iter().find(|n|n.message_id==m.message_id && n.image_key==*key).and_then(|n|n.error.as_ref())})).collect::<Vec<_>>());
+        value
+    }).collect();
+    let summary = store::summary(&state, &doc).ok().map(|s| {
+        let mut v = json!(s);
+        if let Some(items) = v["items"].as_array_mut() {
+            for item in items {
+                item["sender_name"] = json!(
+                    raw.iter()
+                        .find(|m| item["message_id"].as_str() == Some(&m.message_id))
+                        .map(|m| m.display_name())
+                        .unwrap_or("会话成员")
+                );
+            }
+        }
+        v
+    });
     Ok(Json(
-        json!({"document":doc,"summary":store::summary(&state,&doc).ok(),"total":raw.len(),"messages":raw.into_iter().skip(page.offset).take(50).collect::<Vec<_>>()}),
+        json!({"document":doc,"summary":summary,"total":raw.len(),"messages":messages}),
     ))
 }
 /// 查询正文限长，与聊天检索复用同一身份边界。

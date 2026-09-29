@@ -17,6 +17,9 @@ pub struct Message {
     pub chat_id: String,
     /// 原始发送者 ID。
     pub sender_id: String,
+    /// 上游提供的姓名；缺失时不从 ID 或内容猜测。
+    #[serde(default)]
+    pub sender_name: String,
     /// 发送者 ID 命名空间，避免 union_id/user_id 与 open_id 混淆。
     pub sender_id_type: String,
     /// user 或 app 等原始发送者类型。
@@ -35,6 +38,18 @@ pub struct Message {
     pub text: String,
     /// 保留受限原始内容与回复关联；不下载附件。
     pub payload: Value,
+}
+impl Message {
+    /// 正文展示可读身份，原始 ID 仅留作内部证据关联。
+    pub fn display_name(&self) -> &str {
+        if self.is_me {
+            "我"
+        } else if self.sender_name.trim().is_empty() {
+            "会话成员"
+        } else {
+            &self.sender_name
+        }
+    }
 }
 /// 文档目录只由本地 UUID 构造，不使用上游 chat_id 或文件名。
 pub(crate) fn directory(state: &AppState, source: Uuid) -> ApiResult<PathBuf> {
@@ -114,7 +129,12 @@ pub(crate) fn write_summary(
     for item in &summary.items {
         text.push_str(&format!(
             "- **{}** {}\n  - 出处：{} · {} · {}\n  - 原话：{}\n",
-            item.kind, item.text, item.sender_id, item.message_id, item.create_time, item.quote
+            item.kind,
+            item.text,
+            if item.is_me { "我" } else { "会话成员" },
+            "查看原始记录",
+            item.create_time,
+            item.quote
         ));
     }
     write(state, document, &text, "md")
