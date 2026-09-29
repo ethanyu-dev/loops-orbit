@@ -1,4 +1,5 @@
 import { ChevronRight, Menu, ShieldCheck } from 'lucide-react';
+import { ThemeToggle } from '../features/theme/ThemeToggle';
 import type { Session } from '../types';
 import type { Page } from './navigation';
 
@@ -38,9 +39,10 @@ export function Header({
         </strong>
       </div>
       <div className="topbar-right">
+        <ThemeToggle />
         <span className="private-badge">
           <ShieldCheck size={14} />
-          {session.identity.admin ? '仅你可见的工作空间' : '临时访问'}
+          {session.identity.admin ? '个人工作空间' : '临时访问'}
         </span>
         <span className="model-pill">
           <span className="status-dot" />

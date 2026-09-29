@@ -50,8 +50,8 @@ export function Chat({
             <OrbitMark />
           </div>
           <div className="eyebrow">YOUR PERSONAL AGENT</div>
-          <h1>今天，想探索什么？</h1>
-          <p>从一个问题、一闪而过的灵感，或者一个大胆的想法开始。</p>
+          <h1>想法，从这里继续。</h1>
+          <p>聊聊正在发生的事，让 Orbit 和你一起往前走。</p>
         </div>
       ) : (
         <MessageList detail={detail} pending={pending} loading={loading} report={report} />

@@ -65,6 +65,7 @@ export function Sidebar({
         <SquarePen size={17} />
         新建对话<kbd>⌘ K</kbd>
       </button>
+      <div className="nav-label">工作空间</div>
       <nav className="main-nav" aria-label="主导航">
         <button className={page === 'chat' ? 'active' : ''} onClick={() => onNavigate('chat')}>
           <MessageSquare size={17} />

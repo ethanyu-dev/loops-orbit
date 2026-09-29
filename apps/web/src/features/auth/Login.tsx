@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { ArrowRight, KeyRound, ShieldCheck } from 'lucide-react';
 import { api } from '../../api';
 import { OrbitMark } from '../../components/OrbitMark';
+import { ThemeToggle } from '../theme/ThemeToggle';
 import { Spinner } from '../../components/Feedback';
 
 /** 登录表单只在提交过程中持有根 token，成功后立即清空输入。 */
@@ -35,6 +36,9 @@ export function Login({
   }
   return (
     <div className="login-page">
+      <div className="login-theme">
+        <ThemeToggle />
+      </div>
       <div className="login-brand">
         <OrbitMark small />
         <span>orbit.</span>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { SourcePicker } from './SourcePicker';
+import { ConnectionCard } from './ConnectionCard';
+import { Spinner } from '../../components/Feedback';
 import { DocumentView } from './DocumentView';
 import type { Snapshot, Source, Document } from './types';
 
@@ -88,13 +90,24 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
   }
   return (
     <div className="settings-page communication-page">
-      <h1>飞书沟通资料</h1>
-      <p>把重要沟通整理成有出处的背景资料，让 Orbit 能接上你和他人的讨论。</p>
+      <div className="page-eyebrow">CONNECTIONS / FEISHU</div>
+      <div className="communication-heading">
+        <div>
+          <h1>沟通，从此有了上下文。</h1>
+          <p className="page-description">把散落的讨论，连接成属于你的知识。</p>
+        </div>
+        <span className="tag">飞书沟通资料</span>
+      </div>
       {outcome === 'failed' && (
-        <p role="alert">授权未完成。请确认账号在白名单内，应用权限和回调地址已配置，再重新连接。</p>
+        <p className="connection-error" role="alert">
+          授权未完成。请确认账号在白名单内，应用权限和回调地址已配置，再重新连接。
+        </p>
       )}
       {!data ? (
-        <p>读取中…</p>
+        <div className="loading-row">
+          <Spinner />
+          正在读取连接状态…
+        </div>
       ) : !data.enabled ? (
         <section className="settings-card">
           <h2>尚未启用沟通采集</h2>
@@ -102,24 +115,13 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
         </section>
       ) : (
         <>
-          <section className="settings-card communication-card">
-            <h2>{data.connection ? `已连接 · ${data.connection.name}` : '连接我的飞书账号'}</h2>
-            <p>
-              只读你选中的会话。资料可供此管理员工作空间及同一飞书账号与 Orbit
-              的对话使用，不向其他访客开放。文字会交给已配置的模型整理；图片、文件和语音不自动下载。
-            </p>
-            {data.connection?.status === 'reauthorize' && (
-              <p role="alert">授权需要更新，采集已停止。</p>
-            )}
-            <button className="primary" disabled={busy} onClick={() => void connect()}>
-              {data.connection ? '重新授权' : '连接飞书'}
-            </button>
-            {data.connection && (
-              <button disabled={busy} onClick={() => setConfirmation('connection')}>
-                断开并遗忘全部资料
-              </button>
-            )}
-          </section>
+          <ConnectionCard
+            data={data}
+            busy={busy}
+            connect={connect}
+            disconnect={() => setConfirmation('connection')}
+            report={report}
+          />
           {data.connection && (
             <>
               <SourcePicker report={report} onAdded={load} />
