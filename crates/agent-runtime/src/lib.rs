@@ -12,6 +12,9 @@ const MAX_TOOL_CALLS: usize = 8;
 // 摘要输出独立限长，防止压缩后反而挤占近期对话。
 const MAX_SUMMARY_CHARS: usize = 6000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
+// 日资料需要返回结构化条目及引文，不能与短聊天共用输出预算；推理 token 也会占预算。
+const CHAT_OUTPUT_TOKENS: usize = 2048;
+const COMMUNICATION_OUTPUT_TOKENS: usize = 8192;
 // 对话与摘要提示词独立维护，摘要调用不获得工具权限。
 const SUMMARY_PROMPT: &str = include_str!("../prompts/summary.md");
 const MEMORY_PROMPT: &str = include_str!("../prompts/memory.md");
@@ -118,6 +121,7 @@ impl Runtime {
                     progress,
                     self.config.tools_enabled,
                     host.map(|h| h.definitions()).unwrap_or_default(),
+                    CHAT_OUTPUT_TOKENS,
                 )
                 .await?;
             let calls = answer
@@ -145,7 +149,7 @@ impl Runtime {
         let mut body = json!({
             "model": self.config.model,
             "messages": messages,
-            "max_tokens": 2048,
+            "max_tokens": CHAT_OUTPUT_TOKENS,
             "stream": stream,
         });
         if tools {
@@ -236,7 +240,15 @@ impl Runtime {
             json!({"role":"system","content":include_str!("../prompts/communications.md")}),
             json!({"role":"user","content":input.to_string()}),
         ];
-        let answer = self.complete(&messages, None, false).await?;
+        let answer = self
+            .complete_extra(
+                &messages,
+                None,
+                false,
+                Vec::new(),
+                COMMUNICATION_OUTPUT_TOKENS,
+            )
+            .await?;
         serde_json::from_str(answer["content"].as_str().unwrap_or(""))
             .map_err(|_| failure("invalid_communication_summary", true))
     }
@@ -248,7 +260,7 @@ impl Runtime {
         progress: Option<&tokio::sync::watch::Sender<String>>,
         tools: bool,
     ) -> Result<Value, Failure> {
-        self.complete_extra(messages, progress, tools, Vec::new())
+        self.complete_extra(messages, progress, tools, Vec::new(), CHAT_OUTPUT_TOKENS)
             .await
     }
 
@@ -259,12 +271,14 @@ impl Runtime {
         progress: Option<&tokio::sync::watch::Sender<String>>,
         tools: bool,
         extra: Vec<Value>,
+        max_tokens: usize,
     ) -> Result<Value, Failure> {
         let mut body = self.request_body(
             messages,
             progress.is_some() && self.config.stream_enabled,
             tools,
         );
+        body["max_tokens"] = json!(max_tokens);
         if tools {
             body["tools"]
                 .as_array_mut()

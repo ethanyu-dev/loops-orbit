@@ -89,6 +89,7 @@ impl Harness {
                         .to_owned();
                     // 只模拟结构化响应及出处校验，不评价真实模型的归纳能力。
                     if body["messages"][0]["content"].as_str().unwrap().contains("沟通资料整理器") {
+                        assert_eq!(body["max_tokens"],8192,"结构化日摘要必须有独立于短聊天的输出预算");
                         let input: Value=serde_json::from_str(&text).unwrap();
                         let items:Vec<Value>=input["messages"].as_array().unwrap().iter().filter(|message| message["text"].as_str().is_some_and(|s|s.contains("材料") || s.contains("散步"))).map(|message| {
                             let quote=message["text"].as_str().unwrap();

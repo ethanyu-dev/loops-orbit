@@ -3,7 +3,11 @@ use super::{
     store::{self, Message},
     unavailable,
 };
-use crate::{AppState, error::ApiResult};
+use crate::{
+    AppState,
+    error::{ApiError, ApiResult},
+};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -59,16 +63,25 @@ fn evidence<'a>(item: &Item, messages: &'a [Message]) -> ApiResult<&'a Message> 
         || item.quote.trim().is_empty()
         || item.quote.chars().count() > 1000
     {
-        return Err(unavailable("无效整理条目"));
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_summary_invalid_item",
+        ));
     }
     let source = messages
         .iter()
         .find(|m| m.message_id == item.message_id && !m.deleted && m.text.contains(&item.quote))
-        .ok_or_else(|| unavailable("证据不存在"))?;
+        .ok_or(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_summary_invalid_quote",
+        ))?;
     if (item.kind == "my_commitment" && !source.is_me)
         || (item.kind == "their_commitment" && (source.is_me || source.sender_type != "user"))
     {
-        return Err(unavailable("承诺归属错误"));
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_summary_invalid_owner",
+        ));
     }
     Ok(source)
 }
@@ -140,10 +153,18 @@ async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
             .runtime
             .summarize_communications(&json!({"messages":input}))
             .await
-            .map_err(unavailable)?;
-        let mut candidates: Vec<Item> = serde_json::from_value(value).map_err(unavailable)?;
+            .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.code))?;
+        let mut candidates: Vec<Item> = serde_json::from_value(value).map_err(|_| {
+            ApiError(
+                StatusCode::BAD_GATEWAY,
+                "communication_summary_invalid_format",
+            )
+        })?;
         if candidates.len() > MAX_ITEMS_PER_CHUNK {
-            return Err(unavailable("条目过多"));
+            return Err(ApiError(
+                StatusCode::BAD_GATEWAY,
+                "communication_summary_too_many_items",
+            ));
         }
         let allowed: Vec<Message> = chunk.into_iter().cloned().collect();
         for item in &mut candidates {
