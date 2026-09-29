@@ -13,6 +13,8 @@ const OVERLAP_SECONDS: i64 = 600;
 const SYNC_SECONDS: i64 = 600;
 const ERROR_SECONDS: i64 = 300;
 const MAX_MESSAGE_BYTES: usize = 128 * 1024;
+// 有积压时最多每秒推进五页；空队列保持两秒轮询，避免会话数量乘上固定睡眠。
+const ACTIVE_SYNC_DELAY_MS: u64 = 200;
 
 /// 独立采集 worker 不创建 runs，不发送聊天回复；每次一页给其他来源留出机会。
 pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
@@ -32,25 +34,31 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
         if *stop.borrow() {
             return;
         }
-        let mut delay = 2;
+        let mut delay = 2000;
         if state.config.communications.is_some() {
             let work = async {
                 match kind {
-                    0 => step(state).await.map(|_| ()),
-                    1 => super::summary::step(state).await.map(|_| ()),
-                    2 => super::search::index_step(state).await,
-                    3 => super::subscription::discover(state).await,
-                    4 => super::subscription::history_step(state).await,
-                    _ => super::images::step(state).await,
+                    0 => step(state).await,
+                    1 => super::summary::step(state).await,
+                    2 => super::search::index_step(state).await.map(|_| false),
+                    3 => super::subscription::discover(state).await.map(|_| false),
+                    4 => super::subscription::history_step(state)
+                        .await
+                        .map(|_| false),
+                    _ => super::images::step(state).await.map(|_| false),
                 }
             };
             let result = tokio::select! { result=work=>result, _=stop.changed()=>return };
-            if let Err(error) = result {
-                tracing::warn!(code = error.1, kind, "沟通后台任务暂时失败");
-                delay = 60;
+            match result {
+                Ok(true) if kind == 0 => delay = ACTIVE_SYNC_DELAY_MS,
+                Err(error) => {
+                    tracing::warn!(code = error.1, kind, "沟通后台任务暂时失败");
+                    delay = 60000;
+                }
+                _ => {}
             }
         }
-        tokio::select! {_=tokio::time::sleep(Duration::from_secs(delay))=>{},_=stop.changed()=>return}
+        tokio::select! {_=tokio::time::sleep(Duration::from_millis(delay))=>{},_=stop.changed()=>return}
     }
 }
 /// 公共单步入口供真实 worker 和协议夹具共用，不使用伪造聊天队列。
@@ -126,16 +134,20 @@ pub(super) async fn page(
         return Err(unavailable("无效分页状态"));
     }
     // 姓名接口权限不足时仍同步正文，缺失身份显示为会话成员。
-    let names = client::json_response(
-        client::get(
-            state,
-            &format!("/im/v1/chats/{}/members", source.chat_id),
-            &token,
+    let names = if items.is_empty() {
+        None
+    } else {
+        client::json_response(
+            client::get(
+                state,
+                &format!("/im/v1/chats/{}/members", source.chat_id),
+                &token,
+            )
+            .query(&[("member_id_type", "open_id"), ("page_size", "100")]),
         )
-        .query(&[("member_id_type", "open_id"), ("page_size", "100")]),
-    )
-    .await
-    .ok();
+        .await
+        .ok()
+    };
     let mut days: BTreeMap<String, Vec<store::Message>> = BTreeMap::new();
     for item in items {
         let mut message = normalize(item, &source.chat_id, open_id)?;

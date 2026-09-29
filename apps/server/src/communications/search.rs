@@ -309,9 +309,10 @@ pub(crate) async fn context(
 /// 汇总完整来源的处理进度，不以最近一百份文件冒充总量。
 pub(super) async fn progress(state: &AppState) -> ApiResult<Vec<serde_json::Value>> {
     let _guard = state.communications.lock().await;
-    let sources: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM communication_sources")
-        .fetch_all(&state.pool)
-        .await?;
+    let sources: Vec<Uuid> =
+        sqlx::query_scalar("SELECT DISTINCT source_id FROM communication_documents")
+            .fetch_all(&state.pool)
+            .await?;
     let mut result = vec![];
     for source in sources {
         let docs: Vec<Document> = sqlx::query_as(sqlx::AssertSqlSafe(format!(

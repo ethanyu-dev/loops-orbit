@@ -7,6 +7,9 @@ import { Spinner } from '../../components/Feedback';
 import { DocumentView } from './DocumentView';
 import type { Snapshot, Source, Document } from './types';
 
+// 大量自动订阅会话按页展示，避免一次渲染全部操作面板。
+const SOURCE_PAGE_SIZE = 25;
+
 /** 飞书资料的独立管理入口；授权、选择来源和删除分别是明确的用户动作。 */
 export function Communications({ report }: { report: (e: unknown) => void }) {
   const [data, setData] = useState<Snapshot | null>(null);
@@ -17,6 +20,8 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
       : null;
   });
   const [query, setQuery] = useState('');
+  const [sourceQuery, setSourceQuery] = useState('');
+  const [sourcePage, setSourcePage] = useState(0);
   const [results, setResults] = useState<Document[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<string | null>(null);
@@ -89,6 +94,22 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
             ? `消息拉取完成于 ${new Date(source.last_synced_at).toLocaleString()}`
             : '等待拉取新消息';
   }
+  const withDocuments = new Set(data?.progress.filter((p) => p.total > 0).map((p) => p.source_id));
+  const filteredSources = (data?.sources || [])
+    .filter((s) => s.label.toLocaleLowerCase().includes(sourceQuery.trim().toLocaleLowerCase()))
+    .sort(
+      (a, b) =>
+        Number(withDocuments.has(b.id)) - Number(withDocuments.has(a.id)) ||
+        a.label.localeCompare(b.label, 'zh-CN'),
+    );
+  const page = Math.min(
+    sourcePage,
+    Math.max(0, Math.ceil(filteredSources.length / SOURCE_PAGE_SIZE) - 1),
+  );
+  const visibleSources = filteredSources.slice(
+    page * SOURCE_PAGE_SIZE,
+    (page + 1) * SOURCE_PAGE_SIZE,
+  );
   return (
     <div className="settings-page communication-page">
       <div className="page-eyebrow">CONNECTIONS / FEISHU</div>
@@ -158,7 +179,18 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
               <section className="settings-card communication-card">
                 <h2>已订阅会话 · {data.sources.length}</h2>
                 {!data.sources.length && <p>等待发现可访问的会话，也可以手动补充订阅。</p>}
-                {data.sources.map((source) => (
+                <label>
+                  查找已订阅会话
+                  <input
+                    value={sourceQuery}
+                    placeholder="输入联系人或群聊名称"
+                    onChange={(e) => {
+                      setSourceQuery(e.target.value);
+                      setSourcePage(0);
+                    }}
+                  />
+                </label>
+                {visibleSources.map((source) => (
                   <article className="communication-evidence" key={source.id}>
                     <strong>{source.label}</strong>
                     <p>{status(source)}</p>
@@ -213,6 +245,24 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                     </div>
                   </article>
                 ))}
+                {filteredSources.length === 0 && data.sources.length > 0 && <p>没有匹配的会话。</p>}
+                {filteredSources.length > SOURCE_PAGE_SIZE && (
+                  <div className="communication-row">
+                    <button disabled={page === 0} onClick={() => setSourcePage(page - 1)}>
+                      上一页会话
+                    </button>
+                    <span>
+                      第 {page + 1}/{Math.ceil(filteredSources.length / SOURCE_PAGE_SIZE)} 页 ·{' '}
+                      {filteredSources.length} 个会话
+                    </span>
+                    <button
+                      disabled={(page + 1) * SOURCE_PAGE_SIZE >= filteredSources.length}
+                      onClick={() => setSourcePage(page + 1)}
+                    >
+                      下一页会话
+                    </button>
+                  </div>
+                )}
               </section>
               {confirmation && (
                 <section className="settings-card communication-card" role="alert">
