@@ -20,10 +20,12 @@ export function HistoryImport({
   data,
   reload,
   report,
+  onQueued,
 }: {
   data: Snapshot;
   reload: () => Promise<void>;
   report: (error: unknown) => void;
+  onQueued: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const sources = data.sources.filter((source) => source.enabled);
@@ -53,6 +55,7 @@ export function HistoryImport({
           ? `已提交 ${result.count} 个会话（${startDate} 至 ${endDate}）。后台将逐步拉取、整理，关闭页面后继续；相同范围的进行中任务会继续原有进度。`
           : '当前没有可整理的已启用会话。',
       );
+      onQueued();
       await reload();
     } catch (error) {
       report(error);
@@ -64,12 +67,6 @@ export function HistoryImport({
     event.preventDefault();
     void enqueue();
   }
-  const states: Record<string, string> = {
-    pending: '等待拉取',
-    running: '正在拉取',
-    complete: '消息已拉取',
-    failed: '拉取失败，将自动重试',
-  };
   return (
     <section className="settings-card communication-card">
       <h2>整理历史消息</h2>
@@ -124,34 +121,6 @@ export function HistoryImport({
         </fieldset>
       </form>
       {notice && <p role="status">{notice}</p>}
-      {data.history_jobs.length > 0 && (
-        <details className="history-jobs">
-          <summary>最近历史任务 · {data.history_jobs.length}</summary>
-          <p>
-            最多展示最近 100
-            个任务。“消息已拉取”之后仍可能在整理图片、摘要和索引，完整进度见会话列表。
-          </p>
-          {data.history_jobs.map((job) => (
-            <div className="communication-evidence" key={job.id}>
-              <strong>{data.sources.find((s) => s.id === job.source_id)?.label || '会话'}</strong>
-              <p>
-                {new Date(job.start_at * 1000).toLocaleDateString('zh-CN', {
-                  timeZone: 'Asia/Shanghai',
-                })}
-                —
-                {new Date((job.end_at - 1) * 1000).toLocaleDateString('zh-CN', {
-                  timeZone: 'Asia/Shanghai',
-                })}{' '}
-                · {states[job.status] || job.status}
-                {data.sources.find((s) => s.id === job.source_id)?.enabled === false &&
-                job.status !== 'complete'
-                  ? ' · 会话已暂停'
-                  : ''}
-              </p>
-            </div>
-          ))}
-        </details>
-      )}
     </section>
   );
 }

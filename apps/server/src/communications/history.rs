@@ -143,3 +143,52 @@ async fn enqueue(
     tx.commit().await?;
     Ok(jobs)
 }
+
+/// 进度轮询只查询数据库元数据，不扫描原文文件，也不受最近 100 个任务列表限制。
+pub(super) async fn progress(
+    State(state): State<AppState>,
+    identity: Identity,
+) -> ApiResult<Json<Value>> {
+    identity.require_admin()?;
+    // 同一快照聚合计数和活动列表，暂停任务独立计数，避免误称已完成或正在执行。
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let counts: Value = sqlx::query_scalar(
+        r#"
+        SELECT jsonb_build_object(
+            'total',count(*),
+            'pending',count(*) FILTER (WHERE s.enabled AND j.status='pending'),
+            'running',count(*) FILTER (WHERE s.enabled AND j.status='running'),
+            'complete',count(*) FILTER (WHERE s.enabled AND j.status='complete'),
+            'failed',count(*) FILTER (WHERE s.enabled AND j.status='failed'),
+            'paused',count(*) FILTER (WHERE NOT s.enabled),
+            'pages_processed',COALESCE(sum(j.pages_processed),0),
+            'last_progress_at',max(j.last_progress_at)
+        ) FROM communication_history_jobs j JOIN communication_sources s ON s.id=j.source_id
+    "#,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let jobs: Vec<Value> = sqlx::query_scalar(
+        r#"
+        SELECT jsonb_build_object('id',j.id,'label',s.label,'enabled',s.enabled,
+            'start_at',j.start_at,'end_at',j.end_at,'status',j.status,'error',j.error,
+            'pages_processed',j.pages_processed,'last_progress_at',j.last_progress_at,
+            'next_attempt',j.next_attempt)
+        FROM communication_history_jobs j JOIN communication_sources s ON s.id=j.source_id
+        ORDER BY CASE WHEN NOT s.enabled THEN 4 WHEN j.status='failed' THEN 0
+            WHEN j.status='running' THEN 1 WHEN j.status='pending' THEN 2 ELSE 3 END,
+            j.last_progress_at DESC NULLS LAST,j.created_at DESC,j.id LIMIT 20
+    "#,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let connected: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_connections WHERE owner='admin' AND status='active')")
+        .fetch_one(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"counts":counts,"jobs":jobs,"connected":connected}),
+    ))
+}

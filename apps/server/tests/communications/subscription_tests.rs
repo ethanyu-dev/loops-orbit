@@ -377,6 +377,19 @@ async fn today_history_keeps_fixed_snapshot() {
             .unwrap();
     assert_eq!(end, snapshot);
     assert_eq!(status, "complete");
+    // 成功提交的两页才推进计数与时间，不把任务重复入队算作额外进度。
+    let (_, _, progress) = h
+        .request(
+            "GET",
+            "/api/communications/history/progress",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(progress["counts"]["pages_processed"], 2);
+    assert_eq!(progress["counts"]["complete"], 1);
+    assert!(progress["counts"]["last_progress_at"].is_string());
+
     server.abort();
     h.close().await;
 }
@@ -474,6 +487,36 @@ async fn batch_history_selection_and_atomicity() {
             .await
             .unwrap();
     assert_eq!(paused, 0);
+    // 全量进度不受 100 条展示上限影响，暂停状态独立计数，内部游标不可出现在响应中。
+    sqlx::query("UPDATE communication_sources SET enabled=false WHERE id=$1")
+        .bind(ids[0])
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE communication_history_jobs SET status='complete' WHERE source_id=$1")
+        .bind(ids[2])
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE communication_history_jobs SET status='failed',error='communication_unavailable',pages_processed=3,last_progress_at=now() WHERE source_id=$1").bind(ids[3]).execute(&h.state.pool).await.unwrap();
+    sqlx::query("UPDATE communication_history_jobs SET pages_processed=12,last_progress_at=now() WHERE source_id=$1").bind(ids[1]).execute(&h.state.pool).await.unwrap();
+    let route = "/api/communications/history/progress";
+    assert_eq!(
+        h.request("GET", route, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, _, progress) = h.request("GET", route, Some(&cookie), Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(progress["counts"]["total"], 799);
+    assert_eq!(progress["counts"]["pending"], 795);
+    for state in ["running", "complete", "failed", "paused"] {
+        assert_eq!(progress["counts"][state], 1);
+    }
+    assert_eq!(progress["counts"]["pages_processed"], 15);
+    assert!(progress["counts"]["last_progress_at"].is_string());
+    assert_eq!(progress["jobs"].as_array().unwrap().len(), 20);
+    assert_eq!(progress["jobs"][0]["status"], "failed");
+    assert!(!progress.to_string().contains("keep_cursor"));
     server.abort();
     h.close().await;
 }

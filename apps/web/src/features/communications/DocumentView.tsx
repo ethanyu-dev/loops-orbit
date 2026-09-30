@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { api } from '../../api';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { api, errorText } from '../../api';
 import type { Detail, Item } from './types';
 
 // 分类展示不暗示机器摘要已被用户确认。
@@ -20,6 +20,9 @@ export function DocumentView({
   report: (e: unknown) => void;
   onClose: () => void;
 }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [loadError, setLoadError] = useState('');
+  const [revision, setRevision] = useState(0);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [offset, setOffset] = useState(0);
   const [item, setItem] = useState<number | null>(null);
@@ -29,13 +32,35 @@ export function DocumentView({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [key, setKey] = useState(() => crypto.randomUUID());
-  const load = useCallback(
-    async () => setDetail(await api<Detail>(`/communications/documents/${id}?offset=${offset}`)),
-    [id, offset],
-  );
+  // 卸载前恢复触发按钮，避免关闭弹窗后丢失长列表中的键盘位置。
+  useLayoutEffect(() => {
+    const element = dialog.current;
+    const previous = document.activeElement;
+    element?.showModal();
+    return () => {
+      element?.close();
+      if (previous instanceof HTMLElement && previous.isConnected) {
+        previous.focus({ preventScroll: true });
+      }
+    };
+  }, []);
+  // 切页或关闭时取消旧请求，避免慢响应覆盖新页；错误留在弹窗内供重试。
   useEffect(() => {
-    void load().catch(report);
-  }, [load, report]);
+    const controller = new AbortController();
+    setDetail(null);
+    setLoadError('');
+    setItem(null);
+    void api<Detail>(`/communications/documents/${id}?offset=${offset}`, {
+      signal: controller.signal,
+    })
+      .then((value) => {
+        if (!controller.signal.aborted) setDetail(value);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setLoadError(errorText(error));
+      });
+    return () => controller.abort();
+  }, [id, offset, revision]);
   /** 归纳文本可修正；选择另一个条目后更换幂等键。 */
   function select(value: Item, index: number) {
     setItem(index);
@@ -68,136 +93,154 @@ export function DocumentView({
     }
   }
   return (
-    <section className="settings-card communication-card">
-      <div className="communication-row">
-        <h2>沟通整理 · {detail?.document.day}</h2>
-        <button onClick={onClose}>关闭资料</button>
-      </div>
-      <p>机器归纳需结合原话核对。长期信息候选不会自动写入个人记忆。</p>
-      {notice && <p role="status">{notice}</p>}
-      {!detail ? (
-        <p>读取中…</p>
-      ) : (
-        <>
-          {!detail.summary && (
-            <p>
-              等待整理；原始记录已经保存。
-              <button onClick={() => void load().catch(report)}>刷新</button>
-            </p>
-          )}
-          {detail.summary && (
-            <p>
-              共 {detail.summary.message_count} 条记录；{detail.summary.unsupported_count}{' '}
-              条消息未参与文字摘要；图片解读在对应原始记录下单独展示。
-            </p>
-          )}
-          {detail.summary?.items.length === 0 && <p>这部分资料没有提取到明确事项。</p>}
-          {detail.summary?.items.map((value, index) => (
-            <article className="communication-evidence" key={`${value.message_id}-${index}`}>
-              <span className="tag">{LABELS[value.kind] || value.kind}</span>
-              <p>{value.text}</p>
-              <blockquote>{value.quote}</blockquote>
-              <small>
-                {value.sender_name || (value.is_me ? '我' : '会话成员')} ·{' '}
-                {new Date(value.create_time).toLocaleString()}
-              </small>
-              <button onClick={() => select(value, index)}>据此安排提醒</button>
-            </article>
-          ))}
-          {item !== null && (
-            <form onSubmit={(event) => void create(event)}>
-              <h3>确认跟进事项</h3>
-              <label>
-                要提醒我的事
-                <input
-                  value={topic}
-                  maxLength={500}
-                  onChange={(e) => {
-                    setTopic(e.target.value);
-                    setKey(crypto.randomUUID());
-                  }}
-                  required
-                />
-              </label>
-              <label>
-                方式
-                <select
-                  value={kind}
-                  onChange={(e) => {
-                    setKind(e.target.value);
-                    setKey(crypto.randomUUID());
-                  }}
-                >
-                  <option value="reminder">到时提醒</option>
-                  <option value="checkin">轻量回访（需已开启主动回访）</option>
-                </select>
-              </label>
-              <label>
-                时间（{Intl.DateTimeFormat().resolvedOptions().timeZone}）
-                <input
-                  type="datetime-local"
-                  value={due}
-                  required
-                  onChange={(e) => {
-                    setDue(e.target.value);
-                    setKey(crypto.randomUUID());
-                  }}
-                />
-              </label>
-              <button className="primary" disabled={busy}>
-                确认安排
-              </button>
-              <button type="button" onClick={() => setItem(null)}>
-                取消
-              </button>
-            </form>
-          )}
-          <h3>原始记录</h3>
-          {detail.messages.map((message) => (
-            <article key={message.message_id} className="communication-evidence">
-              <small>
-                {message.sender_name || (message.is_me ? '我' : '会话成员')} ·{' '}
-                {new Date(message.create_time).toLocaleString()}
-              </small>
-              <p>
-                {message.deleted
-                  ? '消息已撤回'
-                  : message.text ||
-                    (message.images?.length
-                      ? '［图片消息］'
-                      : `［${message.message_type}：暂未解析］`)}
-              </p>
-              {message.images?.map((image, index) => (
-                <div className="communication-image" key={image.url}>
-                  <a href={image.url} target="_blank" rel="noreferrer">
-                    查看原图 {message.images.length > 1 ? index + 1 : ''}
-                  </a>
-                  <p>
-                    {image.description
-                      ? `图片机器解读：${image.description}`
-                      : image.reference_only
-                        ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
-                        : image.error
-                          ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
-                          : '图片待解读，原图入口已保存。'}
-                  </p>
-                </div>
-              ))}
-            </article>
-          ))}
-          <div className="communication-row">
-            <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>
-              上一页
-            </button>
-            <span>
-              {detail.total ? offset + 1 : 0}–{Math.min(offset + 50, detail.total)} / {detail.total}
-            </span>
-            <button disabled={offset + 50 >= detail.total} onClick={() => setOffset(offset + 50)}>
-              下一页
-            </button>
+    <dialog
+      ref={dialog}
+      className="communication-dialog"
+      aria-labelledby="communication-document-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
+      <section className="communication-card">
+        <div className="communication-row communication-dialog-heading">
+          <h2 id="communication-document-title">
+            沟通整理{detail ? ` · ${detail.document.day}` : '与原文'}
+          </h2>
+          <button onClick={onClose}>关闭资料</button>
+        </div>
+        <p>机器归纳需结合原话核对。长期信息候选不会自动写入个人记忆。</p>
+        {notice && <p role="status">{notice}</p>}
+        {loadError ? (
+          <div role="alert">
+            <p>{loadError}</p>
+            <button onClick={() => setRevision((value) => value + 1)}>重试读取资料</button>
           </div>
-        </>
-      )}
-    </section>
+        ) : !detail ? (
+          <p role="status">正在读取整理与原文…</p>
+        ) : (
+          <>
+            {!detail.summary && (
+              <p>
+                等待整理；原始记录已经保存。
+                <button onClick={() => setRevision((value) => value + 1)}>刷新</button>
+              </p>
+            )}
+            {detail.summary && (
+              <p>
+                共 {detail.summary.message_count} 条记录；{detail.summary.unsupported_count}{' '}
+                条消息未参与文字摘要；图片解读在对应原始记录下单独展示。
+              </p>
+            )}
+            {detail.summary?.items.length === 0 && <p>这部分资料没有提取到明确事项。</p>}
+            {detail.summary?.items.map((value, index) => (
+              <article className="communication-evidence" key={`${value.message_id}-${index}`}>
+                <span className="tag">{LABELS[value.kind] || value.kind}</span>
+                <p>{value.text}</p>
+                <blockquote>{value.quote}</blockquote>
+                <small>
+                  {value.sender_name || (value.is_me ? '我' : '会话成员')} ·{' '}
+                  {new Date(value.create_time).toLocaleString()}
+                </small>
+                <button onClick={() => select(value, index)}>据此安排提醒</button>
+              </article>
+            ))}
+            {item !== null && (
+              <form onSubmit={(event) => void create(event)}>
+                <h3>确认跟进事项</h3>
+                <label>
+                  要提醒我的事
+                  <input
+                    value={topic}
+                    maxLength={500}
+                    onChange={(e) => {
+                      setTopic(e.target.value);
+                      setKey(crypto.randomUUID());
+                    }}
+                    required
+                  />
+                </label>
+                <label>
+                  方式
+                  <select
+                    value={kind}
+                    onChange={(e) => {
+                      setKind(e.target.value);
+                      setKey(crypto.randomUUID());
+                    }}
+                  >
+                    <option value="reminder">到时提醒</option>
+                    <option value="checkin">轻量回访（需已开启主动回访）</option>
+                  </select>
+                </label>
+                <label>
+                  时间（{Intl.DateTimeFormat().resolvedOptions().timeZone}）
+                  <input
+                    type="datetime-local"
+                    value={due}
+                    required
+                    onChange={(e) => {
+                      setDue(e.target.value);
+                      setKey(crypto.randomUUID());
+                    }}
+                  />
+                </label>
+                <button className="primary" disabled={busy}>
+                  确认安排
+                </button>
+                <button type="button" onClick={() => setItem(null)}>
+                  取消
+                </button>
+              </form>
+            )}
+            <h3>原始记录</h3>
+            {detail.messages.map((message) => (
+              <article key={message.message_id} className="communication-evidence">
+                <small>
+                  {message.sender_name || (message.is_me ? '我' : '会话成员')} ·{' '}
+                  {new Date(message.create_time).toLocaleString()}
+                </small>
+                <p>
+                  {message.deleted
+                    ? '消息已撤回'
+                    : message.text ||
+                      (message.images?.length
+                        ? '［图片消息］'
+                        : `［${message.message_type}：暂未解析］`)}
+                </p>
+                {message.images?.map((image, index) => (
+                  <div className="communication-image" key={image.url}>
+                    <a href={image.url} target="_blank" rel="noreferrer">
+                      查看原图 {message.images.length > 1 ? index + 1 : ''}
+                    </a>
+                    <p>
+                      {image.description
+                        ? `图片机器解读：${image.description}`
+                        : image.reference_only
+                          ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
+                          : image.error
+                            ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
+                            : '图片待解读，原图入口已保存。'}
+                    </p>
+                  </div>
+                ))}
+              </article>
+            ))}
+            <div className="communication-row">
+              <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>
+                上一页
+              </button>
+              <span>
+                {detail.total ? offset + 1 : 0}–{Math.min(offset + 50, detail.total)} /{' '}
+                {detail.total}
+              </span>
+              <button disabled={offset + 50 >= detail.total} onClick={() => setOffset(offset + 50)}>
+                下一页
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </dialog>
   );
 }

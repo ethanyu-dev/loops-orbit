@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::put(super::subscription::settings),
         )
         .route("/history", post(super::history::batch))
+        .route("/history/progress", get(super::history::progress))
         .route("/sources/{id}/history", post(super::history::history))
         .route(
             "/documents/{id}/images/{message_id}/{index}",

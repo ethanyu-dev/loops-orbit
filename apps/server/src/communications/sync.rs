@@ -182,7 +182,7 @@ pub(super) async fn page(
         commit_day(state, source, &day, messages).await?;
     }
     if let Some(job) = history_job {
-        sqlx::query("UPDATE communication_history_jobs SET page_token=$2,status=$3,error=NULL,next_attempt=now()+CASE WHEN $3='complete' THEN interval '1 day' ELSE interval '2 seconds' END WHERE id=$1").bind(job).bind(if more {next} else {""}).bind(if more {"running"} else {"complete"}).execute(&state.pool).await?;
+        sqlx::query("UPDATE communication_history_jobs SET page_token=$2,status=$3,error=NULL,pages_processed=pages_processed+1,last_progress_at=now(),next_attempt=now()+CASE WHEN $3='complete' THEN interval '1 day' ELSE interval '2 seconds' END WHERE id=$1").bind(job).bind(if more {next} else {""}).bind(if more {"running"} else {"complete"}).execute(&state.pool).await?;
     } else {
         sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")
         .bind(source.id).bind(if more {source.window_start} else {None}).bind(if more {source.window_end} else {None}).bind(if more {next} else {""}).bind(more).bind(source.window_end.unwrap_or(source.watermark)).bind(if more {1.0} else {SYNC_SECONDS as f64}).bind(source.window_start==Some(source.start_at)).bind(source.version).execute(&state.pool).await?;

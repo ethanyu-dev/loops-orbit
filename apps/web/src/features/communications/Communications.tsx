@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
+import { HistoryProgress } from './HistoryProgress';
 import { HistoryImport } from './HistoryImport';
 import { SourcePicker } from './SourcePicker';
 import { ConnectionCard } from './ConnectionCard';
@@ -19,6 +20,7 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
       ? id
       : null;
   });
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [query, setQuery] = useState('');
   const [sourceQuery, setSourceQuery] = useState('');
   const [sourcePage, setSourcePage] = useState(0);
@@ -137,6 +139,9 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
         </section>
       ) : (
         <>
+          {data.connection && (
+            <HistoryProgress revision={historyRevision} documents={data.progress} />
+          )}
           <ConnectionCard
             data={data}
             busy={busy}
@@ -171,7 +176,17 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                   <p role="alert">会话发现暂时失败，将自动重试。请检查飞书授权。</p>
                 )}
               </section>
-              <HistoryImport data={data} reload={load} report={report} />
+              <HistoryImport
+                data={data}
+                reload={load}
+                report={report}
+                onQueued={() => {
+                  setHistoryRevision((value) => value + 1);
+                  const panel = document.getElementById('history-progress');
+                  panel?.focus({ preventScroll: true });
+                  panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+              />
               <details className="connection-details">
                 <summary>手动补充订阅</summary>
                 <SourcePicker report={report} onAdded={load} />
