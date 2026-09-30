@@ -1,3 +1,4 @@
+mod progress_tests;
 mod subscription_tests;
 use super::*;
 use axum::{

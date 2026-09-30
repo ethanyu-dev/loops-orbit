@@ -61,7 +61,7 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     .fetch_all(&state.pool)
     .await?;
     let jobs: Vec<super::subscription::HistoryJob> = sqlx::query_as("SELECT id,version,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs ORDER BY created_at DESC LIMIT 100").fetch_all(&state.pool).await?;
-    let progress = super::search::progress(&state).await?;
+    let progress = super::progress::read(&state).await?;
     Ok(Json(
         json!({"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
     ))

@@ -124,6 +124,7 @@ export function HistoryProgress({
   const totals = documents.reduce(
     (sum, row) => ({
       total: sum.total + row.total,
+      checking: sum.checking + (row.checking || 0),
       ready: sum.ready + row.ready,
       summarizing: sum.summarizing + row.summarizing,
       indexing: sum.indexing + row.indexing,
@@ -134,6 +135,7 @@ export function HistoryProgress({
     }),
     {
       total: 0,
+      checking: 0,
       ready: 0,
       summarizing: 0,
       indexing: 0,
@@ -237,6 +239,9 @@ export function HistoryProgress({
                 {totals.images_failed ? `，${totals.images_failed} 张失败重试中` : ''}。
               </p>
               <p>
+                处理统计由后台分批核对，可能稍有延迟。
+                {totals.checking > 0 &&
+                  `另有 ${totals.checking} 份资料统计更新中；图片计数待核对后补齐。`}
                 拉取完成后仍需整理与索引。这里包含新消息与历史消息，同一天同一会话合并为一份资料。
               </p>
             </div>

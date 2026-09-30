@@ -104,6 +104,8 @@ export interface Snapshot {
   progress: {
     source_id: string;
     total: number;
+    /** 尚未完成后台复核的资料，不混同于模型待整理。 */
+    checking: number;
     ready: number;
     summarizing: number;
     indexing: number;

@@ -6,6 +6,7 @@ mod history;
 mod images;
 mod members;
 mod oauth;
+pub mod progress;
 pub mod routes;
 pub(crate) mod search;
 pub(crate) mod store;

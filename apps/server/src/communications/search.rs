@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 // 独立索引命名空间，不与管理员个人记忆或任何访客混用。
-const VECTOR_OWNER: &str = "communications:admin";
+pub(super) const VECTOR_OWNER: &str = "communications:admin";
 const MAX_RESULTS: usize = 6;
 const CONTEXT_PROMPT: &str = include_str!("../../prompts/communication_context.md");
 /// 检索结果携带原文证据，而不是只返回无来源的自然语言总结。
@@ -56,7 +56,7 @@ fn entry(id: Uuid, key: String, content: String) -> Entry {
     }
 }
 /// 文档版本纳入索引指纹，摘要更新后旧向量不能重新关联到新原文。
-fn summary_entry(doc: &Document, summary: &Summary) -> Entry {
+pub(super) fn summary_entry(doc: &Document, summary: &Summary) -> Entry {
     entry(
         doc.id,
         format!("{} {}", doc.day, doc.raw_hash),
@@ -242,6 +242,7 @@ pub(super) async fn index_step(state: &AppState) -> ApiResult<()> {
             embedding::save(&state.pool, config, VECTOR_OWNER, &entry, &vector)
                 .await
                 .map_err(unavailable)?;
+            super::progress::invalidate(state, doc.id).await?;
         }
         break;
     }
@@ -304,71 +305,4 @@ pub(crate) async fn context(
         evidence.push(value);
     }
     Ok(Some(format!("{CONTEXT_PROMPT}\n{}", json!(evidence))))
-}
-
-/// 汇总完整来源的处理进度，不以最近一百份文件冒充总量。
-pub(super) async fn progress(state: &AppState) -> ApiResult<Vec<serde_json::Value>> {
-    let _guard = state.communications.lock().await;
-    let sources: Vec<Uuid> =
-        sqlx::query_scalar("SELECT DISTINCT source_id FROM communication_documents")
-            .fetch_all(&state.pool)
-            .await?;
-    let mut result = vec![];
-    for source in sources {
-        let docs: Vec<Document> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE source_id=$1"
-        )))
-        .bind(source)
-        .fetch_all(&state.pool)
-        .await?;
-        let (
-            mut ready,
-            mut summarizing,
-            mut indexing,
-            mut errors,
-            mut pictures,
-            mut image_ready,
-            mut image_failed,
-        ) = (0, 0, 0, 0, 0, 0, 0);
-        for doc in &docs {
-            let raw = match store::raw(state, doc) {
-                Ok(raw) => raw,
-                Err(_) => {
-                    errors += 1;
-                    continue;
-                }
-            };
-            pictures += raw
-                .iter()
-                .map(|m| super::images::keys(m).len())
-                .sum::<usize>();
-            let notes = super::images::notes(state, doc).await?;
-            image_ready += notes.iter().filter(|n| n.description.is_some()).count();
-            image_failed += notes.iter().filter(|n| n.error.is_some()).count();
-            if doc.summary_error.is_some() {
-                errors += 1;
-                continue;
-            }
-            let Ok(summary) = store::summary(state, doc) else {
-                summarizing += 1;
-                continue;
-            };
-            let entry = summary_entry(doc, &summary);
-            let indexed = if entry.content.is_empty() {
-                true
-            } else if let Some(config) = state
-                .config
-                .memory
-                .as_ref()
-                .and_then(|m| m.embedding.as_ref())
-            {
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memory_vectors WHERE owner=$1 AND id=$2 AND content_hash=$3 AND version=$4)").bind(VECTOR_OWNER).bind(doc.id).bind(entry.hash()).bind(config.version()).fetch_one(&state.pool).await?
-            } else {
-                true
-            };
-            if indexed { ready += 1 } else { indexing += 1 }
-        }
-        result.push(json!({"source_id":source,"total":docs.len(),"ready":ready,"summarizing":summarizing,"indexing":indexing,"errors":errors,"images":pictures,"images_ready":image_ready,"images_failed":image_failed}));
-    }
-    Ok(result)
 }

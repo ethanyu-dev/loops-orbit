@@ -213,6 +213,8 @@ FEISHU_ALLOWED_USERS=ou_xxx
 
 协议实现参考飞书官方 [事件处理](https://github.com/larksuite/node-sdk/blob/main/dispatcher/request-handle.ts)、[AES 解密](https://github.com/larksuite/node-sdk/blob/main/utils/aes-cipher.ts) 和 [回复消息接口](https://open.feishu.cn/document/server-docs/im-v1/message/reply)。没有飞书凭据时入口关闭，其余功能照常运行。
 
+飞书资料页的处理统计由后台分批核对文件和索引，页面只读取数据库快照，不在每次刷新时扫描全部原文。新增或变更资料在复核前显示“统计更新中”；统计可能稍有延迟，读取失败时保留上次结果并支持重试，后台采集独立运行。
+
 ## Railway 部署
 
 1. 创建 Railway 项目，添加支持 pgvector 的 PostgreSQL 服务（仅 BM25 时可用普通 PostgreSQL），并从本仓库根目录创建应用服务；不要把服务根目录设为 `apps/server`。
