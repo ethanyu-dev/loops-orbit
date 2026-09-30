@@ -247,11 +247,11 @@ async fn issue_session(
     )
         .into_response())
 }
-/// 仅公网 HTTPS 添加 Secure，本地开发保留同源和 HttpOnly 约束。
+/// Cookie 仅属于 API 主机；前后端需同站点，跨源请求显式携带凭据。
 fn cookie(state: &AppState, token: &str, age: i64) -> String {
     format!(
         "orbit_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={age}{}",
-        if state.config.public_url.starts_with("https:") {
+        if state.config.api_public_url.starts_with("https:") {
             "; Secure"
         } else {
             ""

@@ -1,3 +1,5 @@
+import { apiUrl } from './config';
+
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
   communication_disabled: '服务端尚未启用飞书沟通采集。',
@@ -43,7 +45,7 @@ const ERRORS: Record<string, string> = {
   conversation_not_found: '这个对话不存在或你没有访问权限。',
 };
 
-/** 前端只使用同源 HttpOnly Cookie，根密钥不写入浏览器持久化存储。 */
+/** 前端只使用 API 主机的 HttpOnly Cookie，根密钥不写入浏览器持久化存储。 */
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -55,9 +57,9 @@ export class ApiError extends Error {
 
 /** 统一解析业务错误，网络中断与服务端拒绝都必须反馈给用户。 */
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
-    credentials: 'same-origin',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...options.headers },
   });
   const data = await response.json().catch(() => ({}));

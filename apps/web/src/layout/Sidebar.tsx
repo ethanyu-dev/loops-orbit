@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { NavLink } from 'react-router-dom';
 import {
   Bell,
   Brain,
@@ -12,7 +13,7 @@ import {
 import type { Conversation, Session } from '../types';
 import { OrbitMark } from '../components/OrbitMark';
 import { formatDate } from '../lib/format';
-import type { Page } from './navigation';
+import { conversationPath, PAGE_PATHS, type Page } from './navigation';
 
 /** 侧栏只维护搜索展开与关键词，身份、导航和会话选择由应用统一管理。 */
 interface SidebarProps {
@@ -67,16 +68,25 @@ export function Sidebar({
       </button>
       <div className="nav-label">工作空间</div>
       <nav className="main-nav" aria-label="主导航">
-        <button className={page === 'chat' ? 'active' : ''} onClick={() => onNavigate('chat')}>
+        <NavLink
+          className={page === 'chat' ? 'active' : ''}
+          to={PAGE_PATHS.chat}
+          onClick={() => onNavigate('chat')}
+        >
           <MessageSquare size={17} />
           对话空间
-        </button>
-        <button className={page === 'memory' ? 'active' : ''} onClick={() => onNavigate('memory')}>
+        </NavLink>
+        <NavLink
+          className={page === 'memory' ? 'active' : ''}
+          to={PAGE_PATHS.memory}
+          onClick={() => onNavigate('memory')}
+        >
           <Brain size={17} />
           个人记忆
-        </button>
-        <button
+        </NavLink>
+        <NavLink
           className={page === 'followups' ? 'active' : ''}
+          to={PAGE_PATHS.followups}
           onClick={() => onNavigate('followups')}
         >
           <Bell size={17} />
@@ -86,30 +96,33 @@ export function Sidebar({
               {unread}
             </span>
           )}
-        </button>
+        </NavLink>
         {session.identity.admin && (
           <>
-            <button
+            <NavLink
               className={page === 'communications' ? 'active' : ''}
+              to={PAGE_PATHS.communications}
               onClick={() => onNavigate('communications')}
             >
               <MessageSquare size={17} />
               飞书沟通资料
-            </button>
-            <button
+            </NavLink>
+            <NavLink
               className={page === 'links' ? 'active' : ''}
+              to={PAGE_PATHS.links}
               onClick={() => onNavigate('links')}
             >
               <Link2 size={17} />
               访问链接
-            </button>
-            <button
+            </NavLink>
+            <NavLink
               className={page === 'status' ? 'active' : ''}
+              to={PAGE_PATHS.status}
               onClick={() => onNavigate('status')}
             >
               <Activity size={17} />
               运行状态
-            </button>
+            </NavLink>
           </>
         )}
       </nav>
@@ -137,14 +150,15 @@ export function Sidebar({
         {conversations
           .filter((c) => c.title.toLowerCase().includes(query.toLowerCase()))
           .map((c) => (
-            <button
+            <NavLink
+              to={conversationPath(c.id)}
               key={c.id}
               className={page === 'chat' && selected === c.id ? 'selected' : ''}
               onClick={() => onSelect(c.id)}
             >
               <span>{c.title}</span>
               {c.channel === 'feishu' && <small>飞书</small>}
-            </button>
+            </NavLink>
           ))}
         {!conversations.length && <p className="history-empty">新的想法，从这里开始。</p>}
       </div>

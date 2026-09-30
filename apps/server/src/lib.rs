@@ -16,14 +16,14 @@ use crate::{
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Request, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use sqlx::PgPool;
 use std::{sync::Arc, time::Duration};
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::cors::CorsLayer;
 
 // JSON 与飞书加密载荷共同受此限制；真实消息文本另有字符数上限。
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -74,11 +74,21 @@ impl AppState {
     }
 }
 
-/// API 与静态资源同源部署，生产环境不需要跨域凭据设置。
+/// 只提供 API；跨域凭据仅允许配置的前端源，写操作继续单独验证 Origin。
 pub fn router(state: AppState) -> Router {
-    let static_files = ServeDir::new(&state.config.web_dist).not_found_service(ServeFile::new(
-        format!("{}/index.html", state.config.web_dist),
-    ));
+    let cors = CorsLayer::new()
+        .allow_origin([HeaderValue::from_str(&state.config.public_url).expect("已验证前端源")])
+        .allow_credentials(true)
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+        ])
+        .allow_headers([header::CONTENT_TYPE])
+        .expose_headers([header::HeaderName::from_static("x-request-id")])
+        .max_age(Duration::from_secs(600));
     Router::new()
         .route("/health/live", get(|| async { "ok" }))
         .route("/health/ready", get(ready))
@@ -127,13 +137,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/admin/links/{id}", delete(api::revoke_link))
         .route("/api/admin/status", get(api::status))
         .route("/api/channels/feishu/events", post(feishu::webhook))
-        .route(
-            "/api/{*path}",
-            get(|| async { ApiError(StatusCode::NOT_FOUND, "not_found") }),
-        )
-        .fallback_service(static_files)
+        .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "not_found") })
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
+        // 位于来源校验之外，让 401/403 等错误也能被可信前端读取。
+        .layer(cors)
         .with_state(state)
 }
 
@@ -237,7 +245,7 @@ async fn boundary(State(state): State<AppState>, request: Request, next: Next) -
     if path.starts_with("/api/") || path == "/metrics" {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
-    if state.config.public_url.starts_with("https:") {
+    if state.config.api_public_url.starts_with("https:") {
         headers.insert(
             "strict-transport-security",
             HeaderValue::from_static("max-age=31536000"),

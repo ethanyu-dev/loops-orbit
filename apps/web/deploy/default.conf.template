@@ -1,0 +1,41 @@
+# 只有带内容哈希的资源长期缓存，入口与公开配置在发布后立即更新。
+map "$status:$uri" $orbit_cache_control {
+    default "no-store";
+    ~^(200|206|304):/assets/ "public, max-age=31536000, immutable";
+}
+
+server {
+    listen ${PORT};
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    server_tokens off;
+
+    add_header Cache-Control $orbit_cache_control always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ${API_ORIGIN}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" always;
+
+    location = /health/live {
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # 配置在容器启动时注入，无需重新构建前端才能切换 API 域名。
+    location = /runtime-config.js {
+        default_type application/javascript;
+        return 200 'window.__ORBIT_CONFIG__ = {apiOrigin: "${API_ORIGIN}"};';
+    }
+
+    # 错发到前端的 API 和缺失资源不能回落为 HTML。
+    location = /api { return 404; }
+    location /api/ { return 404; }
+    location /assets/ { try_files $uri =404; }
+    location ~ \.([a-zA-Z0-9]+)$ { try_files $uri =404; }
+
+    # 所有浏览器路由可直接打开或刷新，具体页面由 React Router 匹配。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

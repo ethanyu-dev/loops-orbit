@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { apiUrl } from '../../config';
 import { ArrowUpRight, Check, Copy, FileText, MessageSquare, ShieldCheck } from 'lucide-react';
 import { OrbitMark } from '../../components/OrbitMark';
 import { Spinner } from '../../components/Feedback';
@@ -25,7 +26,7 @@ export function ConnectionCard({
 }) {
   const [copied, setCopied] = useState(false);
   const connected = data.connection?.status === 'active';
-  const callback = `${location.origin}/api/communications/oauth/callback`;
+  const callback = apiUrl('/communications/oauth/callback');
   /** 只复制公开回调地址，不接触授权令牌。 */
   async function copyCallback() {
     try {

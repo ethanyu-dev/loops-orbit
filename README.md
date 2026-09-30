@@ -2,7 +2,7 @@
 
 [![verify](https://github.com/ethanyu-dev/loops-orbit/actions/workflows/ci.yml/badge.svg)](https://github.com/ethanyu-dev/loops-orbit/actions/workflows/ci.yml)
 
-个人 Agent 服务：Rust 服务端与自研 runtime，Vite + React 网页，飞书单聊入口。PostgreSQL 统一保存会话、访问授权和任务队列，单个镜像可部署到 Railway。
+个人 Agent 服务：Rust 服务端与自研 runtime，Vite + React 网页，飞书单聊入口。PostgreSQL 统一保存会话、访问授权和任务队列，前端静态服务与 Rust API 分别构建、部署到 Railway。
 
 当前版本为 **v0.1.0**，面向个人自托管使用。[下载首版源码](https://github.com/ethanyu-dev/loops-orbit/releases/tag/v0.1.0) · [版本记录](CHANGELOG.md)。飞书沟通采集和主动回访均需单独启用；真实模型、飞书租户和 Railway 环境仍需按下文完成部署验收。
 
@@ -19,7 +19,7 @@
 
 ## 控制台外观
 
-登录页与工作空间右上角可切换浅色、深色主题；首次访问跟随系统外观，手动选择后保存在当前浏览器并跨标签页同步。对话、记忆、提醒、飞书资料、访问链接和状态页使用统一配色。飞书资料页提供连接步骤与授权帮助，可复制当前站点的 OAuth 回调地址；飞书侧仍需登记与服务端 `PUBLIC_URL` 一致的地址。
+登录页与工作空间右上角可切换浅色、深色主题；首次访问跟随系统外观，手动选择后保存在当前浏览器并跨标签页同步。对话、记忆、提醒、飞书资料、访问链接和状态页使用统一配色。飞书资料页提供连接步骤与授权帮助，可复制 API 域名的 OAuth 回调地址；飞书侧需登记与服务端 `API_PUBLIC_URL` 一致的地址。
 
 ## 对话风格
 
@@ -78,7 +78,7 @@ Orbit 默认温和、直接、有判断力，根据用户是在交代任务、�
 启用步骤：
 
 1. 保持飞书机器人和本地记忆配置，在飞书应用中申请用户身份的 `im:chat:read`、`im:message:readonly`、`im:message.group_msg:get_as_user`、`im:message.p2p_msg:get_as_user`，授权时请求 `offline_access` 以刷新令牌。权限需按租户审批/发布生效，实际可读范围取决于平台授权。
-2. 在应用安全设置登记精确回调地址 `https://你的域名/api/communications/oauth/callback`，本地开发使用对应的 `PUBLIC_URL`。
+2. 在应用安全设置登记精确回调地址 `https://api-orbit.ethankit.com/api/communications/oauth/callback`，本地开发使用对应的 `API_PUBLIC_URL`。
 3. 设置 `FEISHU_SYNC_ENABLED=true` 和独立的 `FEISHU_TOKEN_KEY`（`openssl rand -hex 32`），重启服务。令牌以 AES-256-GCM 加密入库，不写入文件或浏览器存储；丢失/更换密钥需要重新授权。OAuth state 绑定发起会话及短期 HttpOnly 回调 Cookie，一次使用。
 4. 以管理员打开“飞书沟通资料”，连接本人账号后自动订阅新增沟通；在“整理历史消息”里选择会话及日期补录。可在来源列表暂停、移除，并核对本人标记、原文、摘要、图片及处理进度。
 
@@ -92,25 +92,29 @@ apps/
     migrations/            # SQLx PostgreSQL 迁移
     src/sql/               # 复杂队列领取和限流 SQL
     tests/                 # 使用真实数据库的隔离集成测试
-  web/                     # Vite + React + TypeScript
+  web/                     # 独立部署的 Vite + React + TypeScript
+    Dockerfile             # Nginx 静态服务，不依赖 Rust 构建
+    railway.toml           # 前端独立构建、监听与健康检查
+    deploy/                # SPA 路由回退及公开运行配置
 crates/
   agent-runtime/           # 独立执行器与工具白名单
     prompts/              # 独立维护对话、摘要和记忆提取提示词
-Dockerfile                 # 前后端构建及非 root 运行镜像
-railway.toml               # Railway 构建、就绪检查和重启策略
+Dockerfile                 # 仅 Rust API 的非 root 运行镜像
+railway.toml               # Rust API 的 Railway 构建、就绪检查和重启策略
 compose.yaml               # 仅供本地开发的 PostgreSQL
 ```
 
 ### 前端模块
 
-`apps/web/src/main.tsx` 只负责清除地址中的临时 token 并挂载应用；`App.tsx` 管理身份、当前页面、会话选择和全局错误。
+`apps/web/src/main.tsx` 清除地址中的临时 token、迁移旧链接并挂载 React Router；`App.tsx` 管理身份、共享布局和全局错误。页面与会话选择以 URL 为准，业务数据由各功能模块维护。
 
 ```text
 apps/web/src/
-  api.ts                   # 同源请求与业务错误提示
+  config.ts                # 公开 API 源配置，不包含凭据
+  api.ts                   # 跨源 Cookie 请求与业务错误提示
   types.ts                 # 服务端响应类型
   components/              # 品牌图形、加载指示、空状态容器
-  layout/                  # 侧栏、顶栏及页面标识
+  layout/                  # 侧栏、顶栏、路径和 URL 导航
   features/
     auth/                  # 管理员登录表单
     chat/                  # 聊天页、消息列表、输入框与 useChat
@@ -123,7 +127,7 @@ apps/web/src/
   styles.css               # 全局样式与响应式规则
 ```
 
-功能模块自行维护局部状态；聊天的轮询、草稿和幂等重试集中在 `useChat`，消息渲染与输入交互由独立组件负责。布局组件通过回调通知应用切换页面或会话，不直接请求 API。前端只根据身份控制入口显示，实际授权始终由服务端校验。
+功能模块自行维护局部状态；聊天的轮询、草稿和幂等重试集中在 `useChat`，消息渲染与输入交互由独立组件负责。侧栏使用可复制和新标签打开的路由链接，不直接请求 API。页面按需加载，加载或渲染失败时保留布局并提供重新加载入口。前端只根据身份控制入口显示，实际授权始终由服务端校验。
 
 ## 本地运行
 
@@ -154,16 +158,21 @@ cargo run -p orbit-server
 npm run dev
 ```
 
-`PUBLIC_URL` 必须与浏览器实际访问的源完全一致；`localhost` 与 `127.0.0.1` 不是同一个源。若 5173 已占用，可用 `npm run dev -- --port 5174`，同时把 `.env` 中 `PUBLIC_URL` 改成 `http://localhost:5174` 并重启 Rust。开发模式下 API 由 Vite 转发到 8080。
+开发时打开 `http://localhost:5173`，使用 `.env` 中的 `ADMIN_TOKEN` 登录。`PUBLIC_URL=http://localhost:5173` 是浏览器唯一可信源，`API_PUBLIC_URL=http://localhost:8080` 是 API 与 OAuth 回调源。Vite 直接请求独立 Rust 服务，开发阶段也验证 CORS 和 Cookie。`localhost` 与 `127.0.0.1` 不能混用；如修改端口，同步调整相应配置并重启服务。已有 `.env` 需要补充 `API_PUBLIC_URL`，旧的 `WEB_DIST` 已不再使用。
 
-也可以只启动 Rust 来使用构建后的页面：
+前端本地 API 地址默认 `http://localhost:8080`，可在 `apps/web/.env.local` 设置 `VITE_API_ORIGIN` 覆盖；它是公开配置，禁止写入任何 token。生产容器通过 `API_ORIGIN` 运行时注入地址，无需重新构建。Rust 启动和镜像构建都不需要 Node 或前端产物。
+
+构建产物可独立预览：
 
 ```sh
 npm run build
-PUBLIC_URL=http://localhost:8080 cargo run -p orbit-server
+# 此时 Rust 的 PUBLIC_URL 也要改为 http://localhost:4173
+npm run preview --workspace @orbit/web
 ```
 
-打开 `http://localhost:8080`，使用 `.env` 中的 `ADMIN_TOKEN` 登录。不要把 `.env` 或任何真实 token 提交到仓库。
+前端仍是一套 React SPA，但功能页具有独立地址：`/chat`、`/chat/:conversationId`、`/memory`、`/followups`、`/communications`、`/links`、`/status`。路由支持直接打开、刷新和浏览器前进后退；资料详情用 `/communications?communication=<UUID>`。旧的 `/#chat=<UUID>` 和 `/?communication=<UUID>` 自动迁移。管理员页对访客显示权限提示，未知路由显示不存在页面；服务端仍独立验证每次 API 请求的权限。
+
+不要把 `.env` 或任何真实 token 提交到仓库。
 
 ## 配置
 
@@ -171,7 +180,10 @@ PUBLIC_URL=http://localhost:8080 cargo run -p orbit-server
 | --- | --- |
 | `DATABASE_URL` | 必填，PostgreSQL 连接串；本地示例使用 55433 端口 |
 | `ADMIN_TOKEN` | 必填，至少 32 字节；推荐随机生成 64 个十六进制字符 |
-| `PUBLIC_URL` | 必填，无路径、无末尾 `/` 的完整源；公网要求 HTTPS |
+| `PUBLIC_URL` | 必填，前端唯一可信源及访客链接地址，例如 `https://orbit.ethankit.com` |
+| `API_PUBLIC_URL` | 必填，Rust API 的公开源；生产使用 `https://api-orbit.ethankit.com`，OAuth 回调使用此地址 |
+| `API_ORIGIN` | 仅前端容器：浏览器访问的 API 源，默认 `https://api-orbit.ethankit.com`；同时用于公开运行配置和 CSP |
+| `VITE_API_ORIGIN` | 仅前端本地开发/自定义静态构建：覆盖默认本地 API 地址；构建时注入，官方生产镜像使用运行时 `API_ORIGIN` |
 | `OPENAI_BASE_URL` | 必填，API 根路径，例如 `https://api.openai.com/v1`；程序追加 `/chat/completions` |
 | `OPENAI_MODEL` | 必填，代理实际支持的模型名称 |
 | `OPENAI_API_KEY` | 必填，只存在于服务端 |
@@ -179,7 +191,6 @@ PUBLIC_URL=http://localhost:8080 cargo run -p orbit-server
 | `AGENT_TOOLS_ENABLED` | 默认 `true`；不支持工具协议的代理可设为 `false` |
 | `PORT` | 默认 `8080`；部署时使用 Railway 注入值 |
 | `WORKER_CONCURRENCY` | 每实例并发任务数，默认 `2`，范围 `1–16` |
-| `WEB_DIST` | 本地默认 `apps/web/dist`，容器内为 `/app/web` |
 | `MEMORY_ENABLED` | 默认 `true`；关闭后不读取或自动写入记忆 |
 | `MEMORY_DIR` | 默认 `memory`，容器 `/app/memory`；生产必须挂载持久卷，UID 10001 需要写权限 |
 | `MEMORY_AUTO_EXTRACT` | 默认 `true`；关闭后仅手工记录，自动提取消耗额外模型调用 |
@@ -208,20 +219,42 @@ FEISHU_ENCRYPT_KEY=...
 FEISHU_ALLOWED_USERS=ou_xxx
 ```
 
-4. 在事件订阅中选择发送至开发者服务器，配置 Encrypt Key，并将请求地址设为 `https://你的域名/api/channels/feishu/events`。正式事件校验原始请求签名、五分钟时间窗口、解密后的 verification token、应用 ID 和用户白名单。URL challenge 兼容无签名请求，但必须通过 verification token 校验且不会入队。
+4. 在事件订阅中选择发送至开发者服务器，配置 Encrypt Key，并将请求地址设为 `https://api-orbit.ethankit.com/api/channels/feishu/events`。正式事件校验原始请求签名、五分钟时间窗口、解密后的 verification token、应用 ID 和用户白名单。URL challenge 兼容无签名请求，但必须通过 verification token 校验且不会入队。
 5. 完成 URL challenge 校验后，向机器人发送单聊文本。回调仅写入任务队列，模型执行和回复发送在后台完成；控制台可查看对应会话及运行结果。
 
 协议实现参考飞书官方 [事件处理](https://github.com/larksuite/node-sdk/blob/main/dispatcher/request-handle.ts)、[AES 解密](https://github.com/larksuite/node-sdk/blob/main/utils/aes-cipher.ts) 和 [回复消息接口](https://open.feishu.cn/document/server-docs/im-v1/message/reply)。没有飞书凭据时入口关闭，其余功能照常运行。
 
 ## Railway 部署
 
-1. 创建 Railway 项目，添加支持 pgvector 的 PostgreSQL 服务（仅 BM25 时可用普通 PostgreSQL），并从本仓库根目录创建应用服务；不要把服务根目录设为 `apps/server`。
-2. Railway 读取根目录 `Dockerfile` 和 `railway.toml`。设置 `DATABASE_URL=${{Postgres.DATABASE_URL}}`（按实际数据库服务名调整）、随机 `ADMIN_TOKEN`、三个 `OPENAI_*` 变量。
-3. 为应用生成域名，设置 `PUBLIC_URL=https://你的域名`。容器使用平台注入的 `PORT`，Rust 同时提供静态页面与 API。
-4. 配置 **一个副本**，挂载持久卷到 `/app/memory`，确保 UID 10001 可读写。文件记忆拒绝重叠实例，部署时让旧实例退出后再启动新实例。配置 embedding 时，数据库用户需有安装 `vector` 扩展的权限，或由管理员预先在 `public` schema 安装。启动自动迁移数据库，`/health/ready` 成功后才接入流量。启用飞书时再补充飞书变量并配置回调。
-5. 正式使用前开启数据库和记忆目录备份，按可接受的数据丢失窗口选择 PITR / 备份策略，并演练恢复。
+同一仓库创建两个服务，构建上下文均为仓库根目录。前端与 API 使用不同镜像、变量和健康检查；API 的发布监听排除前端文件，前端发布无需重建 Rust。下表的前端域名为示例，可替换为实际使用的 `ethankit.com` 子域名。
 
-部署配置依据 Railway [Config as Code](https://docs.railway.com/config-as-code/reference) 与 [健康检查](https://docs.railway.com/deployments/healthchecks)。Railway 的部署健康检查不替代持续监控；请另设外部探测。
+| 设置 | 前端服务 | Rust API 服务 |
+| --- | --- | --- |
+| 自定义域名 | `orbit.ethankit.com` | `api-orbit.ethankit.com` |
+| Railway 配置文件 | `/apps/web/railway.toml`（服务设置中显式指定） | `/railway.toml` |
+| Dockerfile | `apps/web/Dockerfile` | `Dockerfile` |
+| 公开地址变量 | `API_ORIGIN=https://api-orbit.ethankit.com` | `PUBLIC_URL=https://orbit.ethankit.com`、`API_PUBLIC_URL=https://api-orbit.ethankit.com` |
+| 健康检查 | `/health/live`，只检查静态服务 | `/health/ready`，检查数据库 |
+| 持久卷 | 无 | `/app/memory`，UID 10001 可写 |
+
+1. 添加支持 pgvector 的 PostgreSQL 服务（仅 BM25 时可用普通 PostgreSQL）。仅在 API 服务中配置 `DATABASE_URL=${{Postgres.DATABASE_URL}}`（按实际服务名调整）、随机 `ADMIN_TOKEN` 和三个 `OPENAI_*` 变量；不要将密钥复制到前端服务。
+2. 为两个服务分别绑定域名并启用 HTTPS，填入上表地址变量。两个服务分别使用平台注入的 `PORT`。本项目继续使用 `SameSite=Strict`，前后端必须使用同一站点的 HTTPS 子域名；不要将临时 Railway 域名与 `ethankit.com` API 混用。
+3. API 配置 **一个副本**，挂载持久卷并安排旧实例退出后再启动新实例。配置 embedding 时，数据库用户需有安装 `vector` 扩展的权限，或由管理员预先安装；启动自动迁移数据库。前端可以独立重启和扩容。
+4. 飞书 OAuth 改为 `https://api-orbit.ethankit.com/api/communications/oauth/callback`，机器人事件回调改为 `https://api-orbit.ethankit.com/api/channels/feishu/events`。授权完成后 API 跳回前端 `/communications`。API 域名变化后原主机的登录 Cookie 不会迁移，需要重新登录。
+5. 从原单服务切换时，先准备前端服务与 API 域名，再更新后端配置和飞书回调、切换前端域名。最终验收跨域登录/退出、访客链接、功能页刷新与返回、飞书重新授权。开启数据库和记忆目录备份并演练恢复。
+
+前端 Nginx 对 HTML 和运行配置禁用缓存，对带哈希的构建资源长期缓存；深层路由回退到前端入口，缺失静态资源和误发到前端的 `/api/*` 返回 404。Rust 所有未知路径返回 JSON 404，不再回落到网页。前端健康检查独立，因此后端重启期间页面仍可访问，但聊天和资料请求会暂时失败。
+
+本地分别构建：
+
+```sh
+docker build -t orbit-api:local .
+docker build -f apps/web/Dockerfile -t orbit-web:local .
+# 已有本地 Rust API 时，浏览器继续使用 localhost 的同站点 Cookie。
+docker run --rm -p 5173:8080 -e API_ORIGIN=http://localhost:8080 orbit-web:local
+```
+
+部署配置依据 Railway [Config as Code](https://docs.railway.com/config-as-code/reference) 与 [健康检查](https://docs.railway.com/deployments/healthchecks)。跨域配置使用 [tower-http CORS](https://docs.rs/tower-http/latest/tower_http/cors/struct.CorsLayer.html)，静态回退使用 [Nginx try_files](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files)。Railway 部署健康检查不替代持续监控，请另设外部探测。
 
 ### 可用性边界
 
@@ -246,7 +279,7 @@ FEISHU_ALLOWED_USERS=ou_xxx
 
 ## 认证与临时链接
 
-管理员 token 只用于兑换随机会话；浏览器通过 `HttpOnly; SameSite=Strict` Cookie 访问 API，HTTPS 环境附带 `Secure`。管理员会话最长七天，根 token 轮换后旧管理员会话立即失效。
+管理员 token 只用于兑换随机会话；浏览器通过 API 主机专属的 `HttpOnly; SameSite=Strict` Cookie 访问 API，HTTPS 环境附带 `Secure`；Cookie 不设置父域 `Domain`。前端请求显式使用 `credentials: include`，后端仅对 `PUBLIC_URL` 返回带凭据的 CORS 响应。管理员会话最长七天，根 token 轮换后旧管理员会话立即失效。
 
 链接格式为 `https://域名/#token=...`，fragment 不会作为 HTTP URL 发给服务器。网页加载时先清除地址中的 token，再通过 POST 兑换会话。数据库仅保存 SHA-256 摘要；链接原文只在创建成功时显示一次。
 
@@ -287,6 +320,7 @@ Rust 直接依赖统一定义在根 `Cargo.toml`；`Cargo.lock`、`package-lock.
 ```sh
 npm ci
 npm run build
+npm run test:web
 npm run format:check
 npm run format:rust:check
 npm run lint:rust
@@ -296,9 +330,10 @@ cargo test --workspace --locked
 # 建议使用独立测试数据库，不复用个人聊天数据库。
 TEST_DATABASE_URL=postgres://orbit:orbit_test@localhost:55434/orbit_test npm run test:integration
 
-docker build -t orbit:local .
+docker build -t orbit-api:local .
+docker build -f apps/web/Dockerfile -t orbit-web:local .
 ```
 
 单元测试验证工具白名单、参数校验、本地 HTTP 工具往返，以及 SSE 跨字节分片、工具参数拼接和断流拒绝。集成测试使用真实 PostgreSQL 和本地 HTTP 模型夹具，验证认证、授权过期/撤销、访客隔离、幂等、并发领取、租约恢复、连续输入与取消、流式快照恢复、摘要边界与失败恢复、会话隔离和飞书加密事件去重。新增记忆测试覆盖真实文件、中文 BM25、真实 pgvector、旧向量排除、模型版本/维度、抽取证据校验和遗忘围栏。跟进测试覆盖单次提醒、改期与取消、过期、租约恢复、通知已读、时区/静默/冷却、工具证据与来源、回访发现、在途用户输入和遗忘、文件直接编辑、身份隔离与授权撤销，以及本地飞书协议的稳定 UUID 重试。embedding、回访判断与提取输出使用夹具，不验证真实模型语义质量；这些测试也不等同于飞书或 Railway 生产验收。CI 运行编译、格式检查、Clippy 和上述测试。
 
-首版共 4 个运行时测试、41 个数据库集成测试。沟通采集测试另外覆盖 OAuth 浏览器绑定与重放拒绝、刷新串行化、密文篡改、分页失败恢复、采集不产生聊天任务、本人及访客检索隔离、暂停的在途围栏、伪造摘要证据拒绝、来源修正取消提醒和断开清理。CI 还构建用于部署的 Docker 镜像。
+首版共 4 个运行时测试、41 个数据库集成测试。沟通采集测试另外覆盖 OAuth 浏览器绑定与重放拒绝、刷新串行化、密文篡改、分页失败恢复、采集不产生聊天任务、本人及访客检索隔离、暂停的在途围栏、伪造摘要证据拒绝、来源修正取消提醒和断开清理。CI 还分别构建前端和 API 镜像。独立部署边界测试覆盖 CORS 预检与错误响应、来源拒绝、API 的 JSON 404；前端测试覆盖旧会话和资料地址迁移。这些测试不替代生产 DNS、TLS 和飞书租户的验收。

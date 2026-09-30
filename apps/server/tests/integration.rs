@@ -199,9 +199,9 @@ impl Harness {
             database_url: url,
             admin_token: ADMIN.into(),
             public_url: ORIGIN.into(),
+            api_public_url: "http://localhost:8080".into(),
             port: 0,
             workers: 2,
-            web_dist: "missing-test-static-dir".into(),
             model: agent_runtime::ModelConfig {
                 base_url: format!("http://127.0.0.1:{port}/v1"),
                 model: "fixture-model".into(),

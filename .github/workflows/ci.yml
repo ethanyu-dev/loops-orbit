@@ -37,10 +37,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
       - run: npm run build
+      - run: npm run test:web
       - run: npm run format:check
       - run: cargo fmt --all -- --check
       - run: npm run lint:rust
       - run: cargo test --workspace --locked
       - run: npm run test:integration
-      - name: Build deployment image
-        run: docker build --tag orbit:ci .
+      - name: Build API image
+        run: docker build --tag orbit-api:ci .
+      - name: Build web image
+        run: docker build --file apps/web/Dockerfile --tag orbit-web:ci .

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
+import { useSearchParams } from 'react-router-dom';
+import { CONVERSATION_ID } from '../../layout/navigation';
 import { HistoryProgress } from './HistoryProgress';
 import { HistoryImport } from './HistoryImport';
 import { SourcePicker } from './SourcePicker';
@@ -14,12 +16,18 @@ const SOURCE_PAGE_SIZE = 25;
 /** 飞书资料的独立管理入口；授权、选择来源和删除分别是明确的用户动作。 */
 export function Communications({ report }: { report: (e: unknown) => void }) {
   const [data, setData] = useState<Snapshot | null>(null);
-  const [selected, setSelected] = useState<string | null>(() => {
-    const id = new URLSearchParams(location.search).get('communication');
-    return id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-      ? id
-      : null;
-  });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const documentId = searchParams.get('communication');
+  const selected = documentId && CONVERSATION_ID.test(documentId) ? documentId : null;
+  /** 文档选择同步到 URL，刷新和浏览器返回时保留可核对的资料位置。 */
+  function setSelected(id: string | null) {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      if (id) next.set('communication', id);
+      else next.delete('communication');
+      return next;
+    });
+  }
   const [historyRevision, setHistoryRevision] = useState(0);
   const [query, setQuery] = useState('');
   const [sourceQuery, setSourceQuery] = useState('');
@@ -30,11 +38,16 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
   const [outcome] = useState(() => new URLSearchParams(location.search).get('feishu'));
   const load = useCallback(async () => setData(await api<Snapshot>('/communications/status')), []);
   useEffect(() => {
-    if (outcome) history.replaceState(null, '', location.pathname + location.hash);
+    if (!searchParams.has('feishu')) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('feishu');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+  useEffect(() => {
     void load().catch(report);
     const timer = setInterval(() => void load().catch(report), 10000);
     return () => clearInterval(timer);
-  }, [load, outcome, report]);
+  }, [load, report]);
   /** 导航到飞书授权页，凭证交换始终在服务端完成。 */
   async function connect() {
     setBusy(true);
