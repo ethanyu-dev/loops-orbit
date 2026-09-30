@@ -138,7 +138,7 @@ async fn enqueue(
     }
     let ids: Vec<Uuid> = sources.iter().map(|_| Uuid::new_v4()).collect();
     // 相同窗口复用任务，保留在途游标和快照；已完成或失败的任务可由用户重新排队。
-    let jobs = sqlx::query_scalar("INSERT INTO communication_history_jobs(id,source_id,start_at,end_at,snapshot_end) SELECT batch.id,batch.source_id,$3,$4,LEAST($4,extract(epoch FROM now())::bigint) FROM UNNEST($1::uuid[],$2::uuid[]) AS batch(id,source_id) ON CONFLICT(source_id,start_at,end_at) DO UPDATE SET snapshot_end=CASE WHEN communication_history_jobs.status='complete' THEN LEAST(excluded.end_at,extract(epoch FROM now())::bigint) ELSE communication_history_jobs.snapshot_end END,status=CASE WHEN communication_history_jobs.status IN('complete','failed') THEN 'pending' ELSE communication_history_jobs.status END,next_attempt=now(),error=NULL RETURNING id")
+    let jobs = sqlx::query_scalar("INSERT INTO communication_history_jobs(id,source_id,start_at,end_at,snapshot_end) SELECT batch.id,batch.source_id,$3,$4,LEAST($4,extract(epoch FROM now())::bigint) FROM UNNEST($1::uuid[],$2::uuid[]) AS batch(id,source_id) ON CONFLICT(source_id,start_at,end_at) DO UPDATE SET snapshot_end=CASE WHEN communication_history_jobs.status IN('complete','cancelled') THEN LEAST(excluded.end_at,extract(epoch FROM now())::bigint) ELSE communication_history_jobs.snapshot_end END,status=CASE WHEN communication_history_jobs.status IN('complete','failed','cancelled') THEN 'pending' ELSE communication_history_jobs.status END,page_token=CASE WHEN communication_history_jobs.status='cancelled' THEN '' ELSE communication_history_jobs.page_token END,version=communication_history_jobs.version+CASE WHEN communication_history_jobs.status='cancelled' THEN 1 ELSE 0 END,next_attempt=now(),error=NULL RETURNING id")
         .bind(ids).bind(sources).bind(start).bind(end).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(jobs)
@@ -163,7 +163,8 @@ pub(super) async fn progress(
             'running',count(*) FILTER (WHERE s.enabled AND j.status='running'),
             'complete',count(*) FILTER (WHERE s.enabled AND j.status='complete'),
             'failed',count(*) FILTER (WHERE s.enabled AND j.status='failed'),
-            'paused',count(*) FILTER (WHERE NOT s.enabled),
+            'paused',count(*) FILTER (WHERE NOT s.enabled AND j.status<>'cancelled'),
+            'cancelled',count(*) FILTER (WHERE j.status='cancelled'),
             'pages_processed',COALESCE(sum(j.pages_processed),0),
             'last_progress_at',max(j.last_progress_at)
         ) FROM communication_history_jobs j JOIN communication_sources s ON s.id=j.source_id
@@ -178,7 +179,7 @@ pub(super) async fn progress(
             'pages_processed',j.pages_processed,'last_progress_at',j.last_progress_at,
             'next_attempt',j.next_attempt)
         FROM communication_history_jobs j JOIN communication_sources s ON s.id=j.source_id
-        ORDER BY CASE WHEN NOT s.enabled THEN 4 WHEN j.status='failed' THEN 0
+        ORDER BY CASE WHEN j.status='cancelled' THEN 5 WHEN NOT s.enabled THEN 4 WHEN j.status='failed' THEN 0
             WHEN j.status='running' THEN 1 WHEN j.status='pending' THEN 2 ELSE 3 END,
             j.last_progress_at DESC NULLS LAST,j.created_at DESC,j.id LIMIT 20
     "#,
@@ -191,4 +192,30 @@ pub(super) async fn progress(
     Ok(Json(
         json!({"counts":counts,"jobs":jobs,"connected":connected}),
     ))
+}
+
+/// 取消针对历史任务标识，不隐式暂停该会话的新消息订阅。
+#[derive(Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum Cancellation {
+    /// 停止所有历史范围，包括已完成任务的每日复查。
+    All,
+    /// 停止一个明确的历史范围。
+    Job { id: Uuid },
+}
+/// 先推进任务版本再取消，在途页提交会重新检查版本；已保存资料继续可用。
+pub(super) async fn cancel(
+    State(state): State<AppState>,
+    identity: Identity,
+    Json(input): Json<Cancellation>,
+) -> ApiResult<Json<Value>> {
+    identity.require_admin()?;
+    let id = match input {
+        Cancellation::All => None,
+        Cancellation::Job { id } => Some(id),
+    };
+    let _guard = state.communications.lock().await;
+    let count = sqlx::query("UPDATE communication_history_jobs SET status='cancelled',version=version+1,error=NULL WHERE status<>'cancelled' AND ($1::uuid IS NULL OR id=$1)")
+        .bind(id).execute(&state.pool).await?.rows_affected();
+    Ok(Json(json!({"count":count})))
 }

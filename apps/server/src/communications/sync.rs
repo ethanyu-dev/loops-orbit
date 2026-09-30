@@ -101,7 +101,7 @@ pub(super) async fn page(
     source: &Source,
     open_id: &str,
     connection_version: i64,
-    history_job: Option<Uuid>,
+    history_job: Option<(Uuid, i64)>,
 ) -> ApiResult<()> {
     let token = client::access(state).await?;
     let data = client::json_response(client::get(state, "/im/v1/messages", &token).query(&[
@@ -133,35 +133,14 @@ pub(super) async fn page(
     if more && (next.is_empty() || next == source.page_token || next.len() > 16384) {
         return Err(unavailable("无效分页状态"));
     }
-    // 姓名接口权限不足时仍同步正文，缺失身份显示为会话成员。
-    let names = if items.is_empty() {
-        None
-    } else {
-        client::json_response(
-            client::get(
-                state,
-                &format!("/im/v1/chats/{}/members", source.chat_id),
-                &token,
-            )
-            .query(&[("member_id_type", "open_id"), ("page_size", "100")]),
-        )
-        .await
-        .ok()
-    };
+    // 姓名查询不影响原文保存，成员分页直到找到当前页发送者或达到安全边界。
+    let names = super::members::names(state, source, &token, items, open_id).await;
     let mut days: BTreeMap<String, Vec<store::Message>> = BTreeMap::new();
     for item in items {
         let mut message = normalize(item, &source.chat_id, open_id)?;
         if message.sender_name.is_empty()
             && message.sender_id_type == "open_id"
-            && let Some(name) = names
-                .as_ref()
-                .and_then(|v| v["data"]["items"].as_array())
-                .and_then(|items| {
-                    items
-                        .iter()
-                        .find(|v| v["member_id"].as_str() == Some(&message.sender_id))
-                })
-                .and_then(|v| v["name"].as_str())
+            && let Some(name) = names.get(&message.sender_id)
         {
             message.sender_name = name.chars().take(120).collect();
         }
@@ -178,10 +157,18 @@ pub(super) async fn page(
     if !active {
         return Ok(());
     }
+    // 取消后甚至立即重提同一范围，旧 HTTP 响应仍必须因任务版本变化而丢弃。
+    if let Some((id, version)) = history_job {
+        let active: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_history_jobs WHERE id=$1 AND version=$2 AND status='running')")
+            .bind(id).bind(version).fetch_one(&state.pool).await?;
+        if !active {
+            return Ok(());
+        }
+    }
     for (day, messages) in days {
         commit_day(state, source, &day, messages).await?;
     }
-    if let Some(job) = history_job {
+    if let Some((job, _)) = history_job {
         sqlx::query("UPDATE communication_history_jobs SET page_token=$2,status=$3,error=NULL,pages_processed=pages_processed+1,last_progress_at=now(),next_attempt=now()+CASE WHEN $3='complete' THEN interval '1 day' ELSE interval '2 seconds' END WHERE id=$1").bind(job).bind(if more {next} else {""}).bind(if more {"running"} else {"complete"}).execute(&state.pool).await?;
     } else {
         sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")

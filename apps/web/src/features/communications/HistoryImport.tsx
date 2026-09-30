@@ -3,8 +3,8 @@ import { api } from '../../api';
 import type { Snapshot } from './types';
 import { HistorySourcePicker } from './HistorySourcePicker';
 
-// 近一年固定为含今天的 365 个北京时间自然日。
-const RECENT_YEAR_DAYS = 365;
+// 近半年固定为含今天的 180 个北京时间自然日。
+const RECENT_HALF_YEAR_DAYS = 180;
 
 /** 日期选择与服务端统一按北京时间解释，不依赖访问设备的时区。 */
 function date(daysAgo = 0) {
@@ -31,16 +31,16 @@ export function HistoryImport({
   const sources = data.sources.filter((source) => source.enabled);
   // 轮询后暂停或移除的来源不再参与提交，防止旧勾选悄悄恢复采集。
   const eligible = new Set(sources.filter((source) => selected.has(source.id)).map((s) => s.id));
-  const [start, setStart] = useState(() => date(RECENT_YEAR_DAYS - 1));
+  const [start, setStart] = useState(() => date(RECENT_HALF_YEAR_DAYS - 1));
   const [end, setEnd] = useState(() => date());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  /** 全部入口始终使用近一年；多选入口使用用户当前日期。 */
+  /** 全部入口始终使用近半年；多选入口使用用户当前日期。 */
   async function enqueue(all = false) {
     if (busy) return;
     setBusy(true);
     setNotice('');
-    const startDate = all ? date(RECENT_YEAR_DAYS - 1) : start;
+    const startDate = all ? date(RECENT_HALF_YEAR_DAYS - 1) : start;
     const endDate = all ? date() : end;
     try {
       const result = await api<{ count: number }>('/communications/history', {
@@ -71,7 +71,7 @@ export function HistoryImport({
     <section className="settings-card communication-card">
       <h2>整理历史消息</h2>
       <p>
-        默认近一年（含今天的 365
+        默认近半年（含今天的 180
         天），也可多选会话、自定日期。日期按北京时间划分；同一天的资料会更新，局部补录不会删除其他消息。
       </p>
       <div className="history-shortcut">
@@ -85,7 +85,7 @@ export function HistoryImport({
           disabled={busy || !sources.length}
           onClick={() => void enqueue(true)}
         >
-          {busy ? '提交中…' : '整理全部会话近一年'}
+          {busy ? '提交中…' : '整理全部会话近半年'}
         </button>
       </div>
       <form onSubmit={submit}>

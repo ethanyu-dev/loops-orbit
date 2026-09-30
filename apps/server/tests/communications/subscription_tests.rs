@@ -520,3 +520,151 @@ async fn batch_history_selection_and_atomicity() {
     server.abort();
     h.close().await;
 }
+
+// 验证取消围栏能拒绝在途响应，即刻重提不会复活旧页；不验证真实上游中止 HTTP 的能力。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn cancellation_fences_inflight_and_resubmission() {
+    let (h, fixture, server) = setup().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let source = add(&h, &cookie).await;
+    let day = chrono::DateTime::from_timestamp_millis(fixture.lock().unwrap().base)
+        .unwrap()
+        .with_timezone(&chrono_tz::Asia::Shanghai)
+        .date_naive()
+        .to_string();
+    let route = format!("/api/communications/sources/{source}/history");
+    let body = json!({"start_date":day,"end_date":day});
+    let (_, _, first) = h.request("POST", &route, Some(&cookie), body.clone()).await;
+    fixture.lock().unwrap().slow = true;
+    let state = h.state.clone();
+    let inflight = tokio::spawn(async move {
+        communications::subscription::history_step(&state)
+            .await
+            .unwrap();
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if fixture.lock().unwrap().reads > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let cancel = json!({"scope":"job","id":first["id"]});
+    assert_eq!(
+        h.request(
+            "POST",
+            "/api/communications/history/cancel",
+            None,
+            cancel.clone()
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, _, cancelled) = h
+        .request(
+            "POST",
+            "/api/communications/history/cancel",
+            Some(&cookie),
+            cancel,
+        )
+        .await;
+    assert_eq!(cancelled["count"], 1);
+    let (_, _, resumed) = h.request("POST", &route, Some(&cookie), body).await;
+    assert_eq!(resumed["id"], first["id"]);
+    inflight.await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_documents")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "取消前的响应不能写入重提任务");
+    let status: String = sqlx::query_scalar("SELECT status FROM communication_history_jobs")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+    fixture.lock().unwrap().slow = false;
+    communications::subscription::history_step(&h.state)
+        .await
+        .unwrap();
+    let (_, _, cancelled) = h
+        .request(
+            "POST",
+            "/api/communications/history/cancel",
+            Some(&cookie),
+            json!({"scope":"all"}),
+        )
+        .await;
+    assert_eq!(cancelled["count"], 1);
+    let reads = fixture.lock().unwrap().reads;
+    communications::subscription::history_step(&h.state)
+        .await
+        .unwrap();
+    assert_eq!(fixture.lock().unwrap().reads, reads);
+    let (_, _, progress) = h
+        .request(
+            "GET",
+            "/api/communications/history/progress",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(progress["counts"]["cancelled"], 1);
+    assert_eq!(progress["counts"]["running"], 0);
+    let (docs,enabled):(i64,bool)=sqlx::query_as("SELECT (SELECT count(*) FROM communication_documents),enabled FROM communication_sources WHERE id=$1").bind(source).fetch_one(&h.state.pool).await.unwrap();
+    assert_eq!(docs, 1, "取消保留已保存原文");
+    assert!(enabled, "新消息订阅继续启用");
+    server.abort();
+    h.close().await;
+}
+
+// 同一天 60 条原文跨飞书分页全部保存、前端按 50 条分页、成员第二页姓名生效；使用本地协议夹具。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn daily_messages_are_not_capped_at_five() {
+    let (h, fixture, server) = setup().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    add(&h, &cookie).await;
+    fixture.lock().unwrap().bulk = true;
+    for _ in 0..2 {
+        due(&h).await;
+        communications::sync::step(&h.state).await.unwrap();
+    }
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM communication_documents")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    let (_, _, first) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}"),
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(first["total"], 60);
+    assert_eq!(first["messages"].as_array().unwrap().len(), 50);
+    assert_eq!(first["messages"][0]["sender_name"], "小林");
+    let (_, _, last) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}?offset=50"),
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(last["messages"].as_array().unwrap().len(), 10);
+    // 应用身份不能拿真人成员名称替代，也不从通知内容猜测机器人名称。
+    assert_eq!(
+        last["messages"][9]["sender_name"],
+        "应用机器人（名称未获取）"
+    );
+    server.abort();
+    h.close().await;
+}

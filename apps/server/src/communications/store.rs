@@ -45,7 +45,11 @@ impl Message {
         if self.is_me {
             "我"
         } else if self.sender_name.trim().is_empty() {
-            "会话成员"
+            if self.sender_type == "app" || self.sender_id_type == "app_id" {
+                "应用机器人（名称未获取）"
+            } else {
+                "会话成员（姓名未获取）"
+            }
         } else {
             &self.sender_name
         }

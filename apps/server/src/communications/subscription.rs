@@ -72,6 +72,8 @@ pub(super) fn valid_chat(id: &str) -> bool {
 pub(super) struct HistoryJob {
     /// 历史任务本地标识。
     pub id: Uuid,
+    /// 取消与重新提交的版本围栏。
+    pub version: i64,
     /// 所属会话，遗忘时级联清理。
     pub source_id: Uuid,
     /// 固定历史区间起点。
@@ -90,7 +92,8 @@ pub(super) struct HistoryJob {
 }
 /// 从持久队列恢复一页，完成后每日复查原区间以发现编辑和撤回。
 pub async fn history_step(state: &AppState) -> ApiResult<()> {
-    let job: Option<HistoryJob>=sqlx::query_as("SELECT id,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs WHERE next_attempt<=now() AND source_id IN(SELECT id FROM communication_sources WHERE enabled AND day_timezone='Asia/Shanghai') AND EXISTS(SELECT 1 FROM communication_connections WHERE status='active') ORDER BY next_attempt,id LIMIT 1").fetch_optional(&state.pool).await?;
+    let guard = state.communications.lock().await;
+    let job: Option<HistoryJob>=sqlx::query_as("SELECT id,version,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs WHERE status<>'cancelled' AND next_attempt<=now() AND source_id IN(SELECT id FROM communication_sources WHERE enabled AND day_timezone='Asia/Shanghai') AND EXISTS(SELECT 1 FROM communication_connections WHERE status='active') ORDER BY next_attempt,id LIMIT 1").fetch_optional(&state.pool).await?;
     let Some(job) = job else { return Ok(()) };
     let mut source: Source = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE id=$1"
@@ -111,8 +114,17 @@ pub async fn history_step(state: &AppState) -> ApiResult<()> {
             .fetch_one(&state.pool)
             .await?;
     sqlx::query("UPDATE communication_history_jobs SET status='running',snapshot_end=$2,next_attempt=now()+interval '5 minutes' WHERE id=$1").bind(job.id).bind(snapshot_end).execute(&state.pool).await?;
-    if let Err(e) = super::sync::page(state, &source, &open_id, version, Some(job.id)).await {
-        sqlx::query("UPDATE communication_history_jobs SET status='failed',page_token='',error=$2,next_attempt=now()+interval '5 minutes' WHERE id=$1").bind(job.id).bind(e.1).execute(&state.pool).await?;
+    drop(guard);
+    if let Err(e) = super::sync::page(
+        state,
+        &source,
+        &open_id,
+        version,
+        Some((job.id, job.version)),
+    )
+    .await
+    {
+        sqlx::query("UPDATE communication_history_jobs SET status='failed',page_token='',error=$2,next_attempt=now()+interval '5 minutes' WHERE id=$1 AND version=$3 AND status='running'").bind(job.id).bind(e.1).bind(job.version).execute(&state.pool).await?;
     }
     Ok(())
 }

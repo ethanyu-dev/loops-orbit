@@ -9,6 +9,7 @@ const STATES: Record<string, string> = {
   running: '正在分页拉取',
   complete: '本轮消息已拉取',
   failed: '拉取失败，等待重试',
+  cancelled: '已取消历史采集',
 };
 /** 全量任务统计与有限的活动列表；分页数是累计工作量，不等于唯一消息数。 */
 interface Progress {
@@ -26,6 +27,8 @@ interface Progress {
     failed: number;
     /** 暂停来源的任务，不计入其他状态。 */
     paused: number;
+    /** 已取消任务，包含原先暂停的来源。 */
+    cancelled: number;
     /** 累计成功分页，包含重放与复查。 */
     pages_processed: number;
     /** 最近成功分页时间；旧任务可能尚无记录。 */
@@ -73,6 +76,26 @@ export function HistoryProgress({
   const [error, setError] = useState('');
   const [updated, setUpdated] = useState('');
   const [retry, setRetry] = useState(0);
+  const [cancelling, setCancelling] = useState(false);
+  const [notice, setNotice] = useState('');
+  /** 取消停止历史拉取和复查，不删除已有资料，也不暂停新消息。 */
+  async function cancel(id?: string) {
+    setCancelling(true);
+    try {
+      const result = await api<{ count: number }>('/communications/history/cancel', {
+        method: 'POST',
+        body: JSON.stringify(id ? { scope: 'job', id } : { scope: 'all' }),
+      });
+      setNotice(
+        `已取消 ${result.count} 个历史任务。已导入资料保留并继续整理，新消息订阅不受影响。`,
+      );
+      setRetry((value) => value + 1);
+    } catch (reason) {
+      setNotice(errorText(reason));
+    } finally {
+      setCancelling(false);
+    }
+  }
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -121,7 +144,7 @@ export function HistoryProgress({
     },
   );
   const counts = data?.counts;
-  const active = counts ? counts.total - counts.paused : 0;
+  const active = counts ? counts.total - counts.paused - counts.cancelled : 0;
   return (
     <section
       id="history-progress"
@@ -131,8 +154,20 @@ export function HistoryProgress({
     >
       <div className="communication-row">
         <h2 id="history-progress-title">历史整理进度</h2>
-        <button onClick={() => setRetry((value) => value + 1)}>刷新进度</button>
+        <div className="source-actions">
+          <button onClick={() => setRetry((value) => value + 1)}>刷新进度</button>
+          <button
+            disabled={cancelling || !counts || counts.total === counts.cancelled}
+            onClick={() => void cancel()}
+          >
+            {cancelling ? '取消中…' : '取消全部历史任务'}
+          </button>
+        </div>
       </div>
+      {notice && <p role="status">{notice}</p>}
+      <p>
+        取消会停止历史拉取和每日复查；已导入资料保留并继续整理，新消息订阅不受影响。再次提交相同范围可重新开始。
+      </p>
       {error && (
         <p role="alert">
           进度暂未更新：{error} {data ? '以下保留上次结果。' : ''}
@@ -147,14 +182,16 @@ export function HistoryProgress({
               <p role="alert">飞书连接当前不可用，任务会保留；请重新授权后继续。</p>
             )}
             {!counts.total ? (
-              <p>尚未提交历史任务。在下方选择会话，或一键整理全部会话近一年。</p>
+              <p>尚未提交历史任务。在下方选择会话，或一键整理全部会话近半年。</p>
             ) : (
               <>
                 <p>
                   <strong>
-                    本轮拉取完成 {counts.complete} / {active} 个启用任务
+                    {active > 0
+                      ? `本轮拉取完成 ${counts.complete} / ${active} 个启用任务`
+                      : '当前没有启用的历史任务'}
                   </strong>{' '}
-                  · 共 {counts.total} 个任务（包含暂停）
+                  · 共 {counts.total} 个任务（包含暂停与取消）
                 </p>
                 {active > 0 && (
                   <progress
@@ -175,6 +212,9 @@ export function HistoryProgress({
                   </span>
                   <span>
                     已暂停 <strong>{counts.paused}</strong>
+                  </span>
+                  <span>
+                    已取消 <strong>{counts.cancelled}</strong>
                   </span>
                 </div>
                 <p>
@@ -211,7 +251,12 @@ export function HistoryProgress({
                   <article className="communication-evidence" key={job.id}>
                     <strong>{job.label}</strong>
                     <p>
-                      {job.enabled ? STATES[job.status] : '已暂停'} ·{' '}
+                      {job.status === 'cancelled'
+                        ? STATES.cancelled
+                        : job.enabled
+                          ? STATES[job.status]
+                          : '已暂停'}{' '}
+                      ·{' '}
                       {new Date(job.start_at * 1000).toLocaleDateString('zh-CN', {
                         timeZone: 'Asia/Shanghai',
                       })}
@@ -221,6 +266,11 @@ export function HistoryProgress({
                       })}{' '}
                       · 累计 {job.pages_processed} 页
                     </p>
+                    {job.status !== 'cancelled' && (
+                      <button disabled={cancelling} onClick={() => void cancel(job.id)}>
+                        取消此历史任务
+                      </button>
+                    )}
                     {job.error && job.enabled && (
                       <p className="error-text">
                         {job.error === 'communication_provider_rejected'

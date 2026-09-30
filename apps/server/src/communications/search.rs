@@ -288,7 +288,7 @@ pub(crate) async fn context(
                 .unwrap_or_default()
         };
         let link = format!(
-            "{}/?communication={}",
+            "{}/communications?communication={}",
             state.config.public_url, hit.document.id
         );
         let notes = super::images::notes(state, &hit.document).await?;

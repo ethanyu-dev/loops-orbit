@@ -4,6 +4,7 @@ mod crypto;
 pub(crate) mod dependencies;
 mod history;
 mod images;
+mod members;
 mod oauth;
 pub mod routes;
 pub(crate) mod search;
