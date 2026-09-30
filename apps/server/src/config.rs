@@ -10,12 +10,12 @@ pub struct Config {
     pub admin_token: String,
     /// 浏览器唯一可信源，也是生成链接的基础地址。
     pub public_url: String,
+    /// API 的公开源，用于 OAuth 回调及 API 域名上的安全 Cookie。
+    pub api_public_url: String,
     /// Railway 注入的监听端口。
     pub port: u16,
     /// 每实例并行任务数量。
     pub workers: usize,
-    /// 构建后前端静态目录。
-    pub web_dist: String,
     /// OpenAI 兼容模型参数。
     pub model: agent_runtime::ModelConfig,
     /// 可选飞书接入；缺少配置时拒绝启用。
@@ -50,18 +50,8 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let admin_token = required("ADMIN_TOKEN")?;
         ensure!(admin_token.len() >= 32, "ADMIN_TOKEN 至少需要 32 字节");
-        let public_url = required("PUBLIC_URL")?.trim_end_matches('/').to_owned();
-        let public = reqwest::Url::parse(&public_url).context("PUBLIC_URL 格式错误")?;
-        ensure!(
-            public.origin().ascii_serialization() == public_url,
-            "PUBLIC_URL 必须是无路径的完整源地址"
-        );
-        ensure!(
-            public.scheme() == "https"
-                || (public.scheme() == "http"
-                    && matches!(public.host_str(), Some("localhost" | "127.0.0.1"))),
-            "PUBLIC_URL 仅本地允许 HTTP"
-        );
+        let public_url = public_origin("PUBLIC_URL", &required("PUBLIC_URL")?)?;
+        let api_public_url = public_origin("API_PUBLIC_URL", &required("API_PUBLIC_URL")?)?;
         let base_url = required("OPENAI_BASE_URL")?;
         let upstream = reqwest::Url::parse(&base_url).context("OPENAI_BASE_URL 格式错误")?;
         ensure!(
@@ -116,9 +106,9 @@ impl Config {
             database_url: required("DATABASE_URL")?,
             admin_token,
             public_url,
+            api_public_url,
             port: env::var("PORT").unwrap_or("8080".into()).parse()?,
             workers,
-            web_dist: env::var("WEB_DIST").unwrap_or("apps/web/dist".into()),
             model: agent_runtime::ModelConfig {
                 base_url,
                 model: required("OPENAI_MODEL")?,
@@ -134,6 +124,23 @@ impl Config {
             memory,
         })
     }
+}
+
+/// 两个服务只接受规范化的完整源，拒绝路径和凭证，避免回调或来源校验歧义。
+fn public_origin(key: &str, value: &str) -> anyhow::Result<String> {
+    let origin = value.trim_end_matches('/');
+    let url = reqwest::Url::parse(origin).with_context(|| format!("{key} 格式错误"))?;
+    ensure!(
+        url.origin().ascii_serialization() == origin,
+        "{key} 必须是无路径的完整源地址"
+    );
+    ensure!(
+        url.scheme() == "https"
+            || (url.scheme() == "http"
+                && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))),
+        "{key} 仅本地允许 HTTP"
+    );
+    Ok(origin.to_owned())
 }
 
 /// 不回显变量值，确保启动错误不会输出密钥。

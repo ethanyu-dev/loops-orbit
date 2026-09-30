@@ -1,12 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// 开发时仍由 Rust 处理 API 与 Cookie，浏览器只访问一个源。
+// 开发与生产都直接请求独立 API，提前验证跨源凭据和来源校验。
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     strictPort: true,
-    proxy: { '/api': 'http://127.0.0.1:8080', '/health': 'http://127.0.0.1:8080' },
   },
 });

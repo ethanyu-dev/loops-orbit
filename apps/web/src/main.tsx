@@ -1,5 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { BrowserRouter } from 'react-router-dom';
+import { migrateLegacyLocation } from './layout/navigation';
 import './theme.css';
 import './styles.css';
 import './console.css';
@@ -11,4 +13,10 @@ applyTheme(readTheme());
 const incomingToken = new URLSearchParams(location.hash.slice(1)).get('token');
 if (incomingToken) history.replaceState(null, '', location.pathname + location.search);
 
-createRoot(document.getElementById('root')!).render(<App incomingToken={incomingToken} />);
+history.replaceState(null, '', migrateLegacyLocation(new URL(location.href)));
+
+createRoot(document.getElementById('root')!).render(
+  <BrowserRouter>
+    <App incomingToken={incomingToken} />
+  </BrowserRouter>,
+);

@@ -14,7 +14,8 @@
     "format:check": "prettier --check apps/web/src apps/web/vite.config.ts",
     "format:rust": "cargo fmt --all",
     "format:rust:check": "cargo fmt --all -- --check",
-    "lint:rust": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    "lint:rust": "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings",
+    "test:web": "npm run test --workspace @orbit/web"
   },
   "devDependencies": {
     "prettier": "^3.9.9"

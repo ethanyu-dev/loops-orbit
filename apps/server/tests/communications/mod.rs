@@ -1,3 +1,4 @@
+mod deployment_tests;
 mod progress_tests;
 mod subscription_tests;
 use super::*;

@@ -1,47 +1,62 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { X } from 'lucide-react';
 import { api, ApiError, errorText } from './api';
 import type { Conversation, Session } from './types';
 import { OrbitMark } from './components/OrbitMark';
 import { Spinner } from './components/Feedback';
+import { PageBoundary } from './components/PageBoundary';
 import { Sidebar } from './layout/Sidebar';
 import { Header } from './layout/Header';
-import type { Page } from './layout/navigation';
+import { useWorkspaceNavigation } from './layout/useWorkspaceNavigation';
 import { Login } from './features/auth/Login';
-import { Chat } from './features/chat/Chat';
-import { useConversationSelection } from './features/chat/useConversationSelection';
-import { Links } from './features/links/Links';
-import { Memory } from './features/memory/Memory';
-import { Followups } from './features/followups/Followups';
 import { useNotifications } from './features/followups/useNotifications';
-import { Health } from './features/status/Health';
-import { Communications } from './features/communications/Communications';
+
+// 功能页按路由加载，首屏登录和聊天无需下载整个管理界面。
+const Chat = lazy(() => import('./features/chat/Chat').then((m) => ({ default: m.Chat })));
+const Links = lazy(() => import('./features/links/Links').then((m) => ({ default: m.Links })));
+const Memory = lazy(() => import('./features/memory/Memory').then((m) => ({ default: m.Memory })));
+const Followups = lazy(() =>
+  import('./features/followups/Followups').then((m) => ({ default: m.Followups })),
+);
+const Health = lazy(() => import('./features/status/Health').then((m) => ({ default: m.Health })));
+const Communications = lazy(() =>
+  import('./features/communications/Communications').then((m) => ({ default: m.Communications })),
+);
+
+/** 无效地址和无权限入口有明确反馈，避免显示空白工作空间。 */
+function Unavailable({ forbidden = false }: { forbidden?: boolean }) {
+  return (
+    <div className="settings-page" role="status">
+      <h1>{forbidden ? '此页面需要管理员权限' : '页面不存在'}</h1>
+      <Link to="/chat">返回对话空间</Link>
+    </div>
+  );
+}
 
 /** 全局身份和页面状态不持久化凭证，访客到期由 API 的每次认证决定。 */
 export function App({ incomingToken }: { incomingToken: string | null }) {
+  const location = useLocation();
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
   const [error, setError] = useState('');
-  const [page, setPage] = useState<Page>(() =>
-    new URLSearchParams(location.search).has('feishu') ||
-    new URLSearchParams(location.search).has('communication')
-      ? 'communications'
-      : 'chat',
-  );
+  const {
+    page,
+    selected,
+    setSelected,
+    newChat: navigateNewChat,
+    invalidConversation,
+  } = useWorkspaceNavigation();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selected, setSelected] = useConversationSelection();
   const [sidebar, setSidebar] = useState(false);
-  const report = useCallback(
-    (e: unknown) => {
-      setError(errorText(e));
-      if (e instanceof ApiError && e.status === 401) {
-        setSession(null);
-        setConversations([]);
-        setSelected(null);
-      }
-    },
-    [setSelected],
-  );
+  // 身份失效保留当前 URL，重新登录后可回到原页面；回调不依赖导航，避免换页重跑 token 兑换。
+  const report = useCallback((e: unknown) => {
+    setError(errorText(e));
+    if (e instanceof ApiError && e.status === 401) {
+      setSession(null);
+      setConversations([]);
+    }
+  }, []);
   const notifications = useNotifications(session?.identity.owner, report);
   const loadSession = useCallback(async () => {
     setSession(await api<Session>('/me'));
@@ -70,11 +85,10 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
     if (session) void loadConversations().catch(report);
   }, [session, loadConversations, report]);
   const newChat = useCallback(() => {
-    setPage('chat');
-    setSelected(null);
+    navigateNewChat();
     setSidebar(false);
     setError('');
-  }, [setSelected]);
+  }, [navigateNewChat]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
@@ -93,7 +107,6 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
       setSession(null);
       setSelected(null);
       setConversations([]);
-      setPage('chat');
       setError('');
     } catch (e) {
       report(e);
@@ -120,13 +133,10 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
         open={sidebar}
         unread={notifications.data.unread}
         onNewChat={newChat}
-        onNavigate={(nextPage) => {
-          setPage(nextPage);
+        onNavigate={() => {
           setSidebar(false);
         }}
-        onSelect={(id) => {
-          setSelected(id);
-          setPage('chat');
+        onSelect={() => {
           setSidebar(false);
           setError('');
         }}
@@ -142,31 +152,74 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
             </button>
           </div>
         )}
-        {page === 'chat' && (
-          <Chat
-            selected={selected}
-            setSelected={setSelected}
-            session={session}
-            refreshList={loadConversations}
-            report={report}
-          />
-        )}
-        {page === 'followups' && (
-          <Followups
-            report={report}
-            notifications={notifications.data}
-            refreshNotifications={notifications.refresh}
-            openConversation={(id) => {
-              setSelected(id);
-              setPage('chat');
-              void loadConversations().catch(report);
-            }}
-          />
-        )}
-        {page === 'memory' && <Memory report={report} />}
-        {page === 'communications' && session.identity.admin && <Communications report={report} />}
-        {page === 'links' && session.identity.admin && <Links report={report} />}
-        {page === 'status' && session.identity.admin && <Health report={report} />}
+        <PageBoundary resetKey={location.pathname}>
+          <Suspense
+            fallback={
+              <div className="loading-row">
+                <Spinner />
+                正在加载页面…
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<Navigate to="/chat" replace />} />
+              <Route
+                path="/chat/:conversationId?"
+                element={
+                  invalidConversation ? (
+                    <Unavailable />
+                  ) : (
+                    <Chat
+                      selected={selected}
+                      setSelected={setSelected}
+                      session={session}
+                      refreshList={loadConversations}
+                      report={report}
+                    />
+                  )
+                }
+              />
+              <Route
+                path="/followups"
+                element={
+                  <Followups
+                    report={report}
+                    notifications={notifications.data}
+                    refreshNotifications={notifications.refresh}
+                    openConversation={(id) => {
+                      setSelected(id);
+                      void loadConversations().catch(report);
+                    }}
+                  />
+                }
+              />
+              <Route path="/memory" element={<Memory report={report} />} />
+              <Route
+                path="/communications"
+                element={
+                  session.identity.admin ? (
+                    <Communications report={report} />
+                  ) : (
+                    <Unavailable forbidden />
+                  )
+                }
+              />
+              <Route
+                path="/links"
+                element={
+                  session.identity.admin ? <Links report={report} /> : <Unavailable forbidden />
+                }
+              />
+              <Route
+                path="/status"
+                element={
+                  session.identity.admin ? <Health report={report} /> : <Unavailable forbidden />
+                }
+              />
+              <Route path="*" element={<Unavailable />} />
+            </Routes>
+          </Suspense>
+        </PageBoundary>
       </main>
     </div>
   );

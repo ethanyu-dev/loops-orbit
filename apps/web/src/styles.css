@@ -147,7 +147,8 @@ p {
   gap: 4px;
   margin: 25px 0 29px;
 }
-.main-nav button {
+.main-nav a {
+  text-decoration: none;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -157,10 +158,10 @@ p {
   font-size: 14px;
   text-align: left;
 }
-.main-nav button:hover {
+.main-nav a:hover {
   background: var(--panel);
 }
-.main-nav button.active {
+.main-nav a.active {
   background: var(--raised);
   color: var(--text);
 }
@@ -195,7 +196,8 @@ p {
   flex: 1;
   min-height: 0;
 }
-.history-list > button {
+.history-list > a {
+  text-decoration: none;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -206,12 +208,12 @@ p {
   font-size: 13px;
   text-align: left;
 }
-.history-list > button span {
+.history-list > a span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.history-list > button small {
+.history-list > a small {
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
@@ -220,8 +222,8 @@ p {
   border-radius: 3px;
   margin-left: auto;
 }
-.history-list > button:hover,
-.history-list > button.selected {
+.history-list > a:hover,
+.history-list > a.selected {
   background: var(--raised);
   color: var(--text);
 }
