@@ -59,12 +59,12 @@ pub(super) async fn start(
         )
         .append_pair(
             "redirect_uri",
-            &format!("{}{CALLBACK}", state.config.api_public_url),
+            &format!("{}{CALLBACK}", state.config.public_url),
         )
         .append_pair("response_type", "code")
         .append_pair("state", &nonce)
         .append_pair("scope", SCOPES);
-    let secure = if state.config.api_public_url.starts_with("https:") {
+    let secure = if state.config.public_url.starts_with("https:") {
         "; Secure"
     } else {
         ""
@@ -112,19 +112,19 @@ pub(super) async fn callback(
     } else {
         "failed"
     };
-    // 返回配置的前端功能页，不把供应商错误、code、state 带回前端或日志。
+    // 固定相对地址，不把供应商错误、code、state 带回前端或日志。
     Ok((
         [(
             header::SET_COOKIE,
             format!("{COOKIE}=; Path={CALLBACK}; HttpOnly; SameSite=Lax; Max-Age=0"),
         )],
-        Redirect::to(&format!("{}/communications?feishu={outcome}", state.config.public_url)),
+        Redirect::to(&format!("/?feishu={outcome}")),
     )
         .into_response())
 }
 /// 身份取自飞书用户信息接口；重新授权不能悄悄把已有资料换成另一账号。
 async fn connect(state: &AppState, code: &str) -> ApiResult<()> {
-    let (tokens,expires,refresh_expires) = client::exchange(state,json!({"grant_type":"authorization_code","code":code,"redirect_uri":format!("{}{CALLBACK}",state.config.api_public_url)})).await?;
+    let (tokens,expires,refresh_expires) = client::exchange(state,json!({"grant_type":"authorization_code","code":code,"redirect_uri":format!("{}{CALLBACK}",state.config.public_url)})).await?;
     let data = client::json_response(client::get(
         state,
         "/authen/v1/user_info",
