@@ -766,3 +766,68 @@ select:focus-visible {
     margin-left: 0;
   }
 }
+
+/* 批量入口与自选表单分组；会话列表独立滚动，避免数百个来源撑满整页。 */
+.history-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 20px 0 28px;
+}
+.history-shortcut p {
+  margin: 8px 0 0;
+}
+.history-shortcut button {
+  flex-shrink: 0;
+}
+.history-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.history-fields legend {
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+.history-selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.history-source-options {
+  max-height: 224px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 24px;
+}
+.communication-card .history-source-option {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  margin: 0;
+  cursor: pointer;
+}
+.history-source-option:hover {
+  background: var(--raised);
+}
+.history-source-option span {
+  overflow-wrap: anywhere;
+}
+.communication-card .history-source-option input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--text);
+}

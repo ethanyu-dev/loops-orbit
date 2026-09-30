@@ -1,21 +1,12 @@
 use super::{SOURCE_COLUMNS, Source, client, configured, unavailable};
-use crate::{
-    AppState,
-    auth::Identity,
-    error::{ApiError, ApiResult},
-};
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
+use crate::{AppState, auth::Identity, error::ApiResult};
+use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-// 完整发现一轮后十分钟重查；历史请求最多一年，分页处理而非一次拉取。
+// 完整发现一轮后十分钟重查，避免持续扫描空会话。
 const DISCOVERY_SECONDS: f64 = 600.0;
-const MAX_HISTORY_DAYS: i64 = 366;
 
 /// 单独控制自动发现，不改变用户手工暂停或正在同步的来源。
 #[derive(Deserialize)]
@@ -76,67 +67,6 @@ pub(super) fn valid_chat(id: &str) -> bool {
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
-/// 日期按北京时间解释，结束日期包含整天但不能越过当前时刻。
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct HistoryRange {
-    /// 包含的首个北京时间日期。
-    pub start_date: String,
-    /// 包含的最后一个北京时间日期。
-    pub end_date: String,
-}
-/// 日期区间幂等入队，运行中的相同范围不重置游标。
-pub(super) async fn history(
-    State(state): State<AppState>,
-    identity: Identity,
-    Path(id): Path<Uuid>,
-    Json(input): Json<HistoryRange>,
-) -> ApiResult<Json<Value>> {
-    use chrono::TimeZone;
-    identity.require_admin()?;
-    configured(&state)?;
-    let invalid = || ApiError(StatusCode::BAD_REQUEST, "invalid_history_range");
-    let start =
-        chrono::NaiveDate::parse_from_str(&input.start_date, "%Y-%m-%d").map_err(|_| invalid())?;
-    let end =
-        chrono::NaiveDate::parse_from_str(&input.end_date, "%Y-%m-%d").map_err(|_| invalid())?;
-    if end < start
-        || end
-            > chrono::Utc::now()
-                .with_timezone(&super::LOCAL_TIMEZONE)
-                .date_naive()
-        || (end - start).num_days() >= MAX_HISTORY_DAYS
-    {
-        return Err(invalid());
-    }
-    let second = |d: chrono::NaiveDate| {
-        super::LOCAL_TIMEZONE
-            .from_local_datetime(&d.and_hms_opt(0, 0, 0).expect("午夜"))
-            .single()
-            .map(|t| t.timestamp())
-            .ok_or_else(invalid)
-    };
-    let start = second(start)?;
-    let end = second(end.succ_opt().ok_or_else(invalid)?)?;
-    if start >= end || start >= chrono::Utc::now().timestamp() {
-        return Err(invalid());
-    }
-    let _guard = state.communications.lock().await;
-    let enabled: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM communication_sources WHERE id=$1 AND enabled)",
-    )
-    .bind(id)
-    .fetch_one(&state.pool)
-    .await?;
-    if !enabled {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            "communication_source_changed",
-        ));
-    }
-    let job: Uuid=sqlx::query_scalar("INSERT INTO communication_history_jobs(id,source_id,start_at,end_at,snapshot_end) VALUES($1,$2,$3,$4,LEAST($4,extract(epoch FROM now())::bigint)) ON CONFLICT(source_id,start_at,end_at) DO UPDATE SET snapshot_end=CASE WHEN communication_history_jobs.status='complete' THEN LEAST(excluded.end_at,extract(epoch FROM now())::bigint) ELSE communication_history_jobs.snapshot_end END,status=CASE WHEN communication_history_jobs.status IN('complete','failed') THEN 'pending' ELSE communication_history_jobs.status END,next_attempt=now(),error=NULL RETURNING id").bind(Uuid::new_v4()).bind(id).bind(start).bind(end).fetch_one(&state.pool).await?;
-    Ok(Json(json!({"id":job})))
-}
 /// 历史队列独立于增量水位；暂停后保留进度，恢复时继续。
 #[derive(sqlx::FromRow, Serialize)]
 pub(super) struct HistoryJob {

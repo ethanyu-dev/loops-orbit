@@ -380,3 +380,100 @@ async fn today_history_keeps_fixed_snapshot() {
     server.abort();
     h.close().await;
 }
+
+// 验证 800 个来源批量入队、多选去重、失效来源整批拒绝及重试保留游标；不验证真实飞书吞吐或历史可读范围。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn batch_history_selection_and_atomicity() {
+    let (h, _, server) = setup().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let ids: Vec<Uuid> = (0..800).map(|_| Uuid::new_v4()).collect();
+    let chats: Vec<String> = (0..800).map(|i| format!("oc_batch_{i}")).collect();
+    sqlx::query("INSERT INTO communication_sources(id,owner,chat_id,label,start_at,watermark,day_timezone) SELECT id,'admin',chat,chat,0,0,'Asia/Shanghai' FROM UNNEST($1::uuid[],$2::text[]) AS batch(id,chat)")
+        .bind(&ids).bind(chats).execute(&h.state.pool).await.unwrap();
+    sqlx::query("UPDATE communication_sources SET enabled=false WHERE id=$1")
+        .bind(ids[799])
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    let today = chrono::Utc::now()
+        .with_timezone(&chrono_tz::Asia::Shanghai)
+        .date_naive();
+    let range = json!({"start_date":(today-chrono::Duration::days(364)).to_string(),"end_date":today.to_string()});
+    let body =
+        json!({"selection":{"scope":"selected","source_ids":[ids[0],ids[1],ids[0]]},"range":range});
+    let route = "/api/communications/history";
+    assert_eq!(
+        h.request("POST", route, None, body.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, _, result) = h.request("POST", route, Some(&cookie), body.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["count"], 2);
+    sqlx::query("UPDATE communication_history_jobs SET status='running',page_token='keep_cursor',snapshot_end=snapshot_end-60")
+        .execute(&h.state.pool).await.unwrap();
+    let before: Vec<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT id,page_token,snapshot_end FROM communication_history_jobs ORDER BY id",
+    )
+    .fetch_all(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        h.request("POST", route, Some(&cookie), body).await.0,
+        StatusCode::OK
+    );
+    let after: Vec<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT id,page_token,snapshot_end FROM communication_history_jobs ORDER BY id",
+    )
+    .fetch_all(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(before, after);
+    // 任一被暂停或已不存在的来源都会使整个多选请求失败，不能留下部分任务。
+    for invalid in [ids[799], Uuid::new_v4()] {
+        let body =
+            json!({"selection":{"scope":"selected","source_ids":[ids[2],invalid]},"range":range});
+        assert_eq!(
+            h.request("POST", route, Some(&cookie), body).await.0,
+            StatusCode::CONFLICT
+        );
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_history_jobs")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+    let empty = json!({"selection":{"scope":"selected","source_ids":[]},"range":range});
+    assert_eq!(
+        h.request("POST", route, Some(&cookie), empty).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let invalid = json!({"selection":{"scope":"all"},"range":{"start_date":(today-chrono::Duration::days(366)).to_string(),"end_date":today.to_string()}});
+    assert_eq!(
+        h.request("POST", route, Some(&cookie), invalid).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let all = json!({"selection":{"scope":"all"},"range":range});
+    let (status, _, result) = h.request("POST", route, Some(&cookie), all.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["count"], 799);
+    assert_eq!(
+        h.request("POST", route, Some(&cookie), all).await.0,
+        StatusCode::OK
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_history_jobs")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 799);
+    let paused: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM communication_history_jobs WHERE source_id=$1")
+            .bind(ids[799])
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(paused, 0);
+    server.abort();
+    h.close().await;
+}

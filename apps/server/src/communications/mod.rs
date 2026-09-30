@@ -2,6 +2,7 @@ mod calendar;
 mod client;
 mod crypto;
 pub(crate) mod dependencies;
+mod history;
 mod images;
 mod oauth;
 pub mod routes;
