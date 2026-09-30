@@ -94,13 +94,11 @@ apps/
     tests/                 # 使用真实数据库的隔离集成测试
   web/                     # 独立部署的 Vite + React + TypeScript
     Dockerfile             # Nginx 静态服务，不依赖 Rust 构建
-    railway.toml           # 前端独立构建、监听与健康检查
     deploy/                # SPA 路由回退及公开运行配置
 crates/
   agent-runtime/           # 独立执行器与工具白名单
     prompts/              # 独立维护对话、摘要和记忆提取提示词
 Dockerfile                 # 仅 Rust API 的非 root 运行镜像
-railway.toml               # Rust API 的 Railway 构建、就绪检查和重启策略
 compose.yaml               # 仅供本地开发的 PostgreSQL
 ```
 
@@ -228,15 +226,18 @@ FEISHU_ALLOWED_USERS=ou_xxx
 
 ## Railway 部署
 
-同一仓库创建两个服务，构建上下文均为仓库根目录。前端与 API 使用不同镜像、变量和健康检查；API 的发布监听排除前端文件，前端发布无需重建 Rust。下表的前端域名为示例，可替换为实际使用的 `ethankit.com` 子域名。
+同一仓库创建两个服务，构建上下文均为仓库根目录。前端与 API 使用不同镜像、变量和健康检查；API 的发布监听排除前端文件，前端发布无需重建 Rust。下表设置分别保存在 Railway 的各服务中。不要添加仓库根目录的 `railway.toml` 或 `railway.json`：旧版 Config as Code 已弃用，根配置还会覆盖同仓库其他服务的构建与健康检查。下表的前端域名为示例，可替换为实际使用的 `ethankit.com` 子域名。
 
 | 设置 | 前端服务 | Rust API 服务 |
 | --- | --- | --- |
 | 自定义域名 | `orbit.ethankit.com` | `api-orbit.ethankit.com` |
-| Railway 配置文件 | `/apps/web/railway.toml`（服务设置中显式指定） | `/railway.toml` |
 | Dockerfile | `apps/web/Dockerfile` | `Dockerfile` |
+| 构建变量 | `RAILWAY_DOCKERFILE_PATH=apps/web/Dockerfile` | `RAILWAY_DOCKERFILE_PATH=Dockerfile` |
+| 变更监听 | `apps/web/**`、`package.json`、`package-lock.json` | `apps/server/**`、`crates/**`、`Cargo.toml`、`Cargo.lock`、`rust-toolchain.toml`、`Dockerfile` |
 | 公开地址变量 | `API_ORIGIN=https://api-orbit.ethankit.com` | `PUBLIC_URL=https://orbit.ethankit.com`、`API_PUBLIC_URL=https://api-orbit.ethankit.com` |
 | 健康检查 | `/health/live`，只检查静态服务 | `/health/ready`，检查数据库 |
+| 健康检查超时 | 30 秒 | 120 秒 |
+| 重启策略 | `ON_FAILURE`，最多 10 次 | `ON_FAILURE`，最多 10 次 |
 | 持久卷 | 无 | `/app/memory`，UID 10001 可写 |
 
 1. 添加支持 pgvector 的 PostgreSQL 服务（仅 BM25 时可用普通 PostgreSQL）。仅在 API 服务中配置 `DATABASE_URL=${{Postgres.DATABASE_URL}}`（按实际服务名调整）、随机 `ADMIN_TOKEN` 和三个 `OPENAI_*` 变量；不要将密钥复制到前端服务。
@@ -256,7 +257,7 @@ docker build -f apps/web/Dockerfile -t orbit-web:local .
 docker run --rm -p 5173:8080 -e API_ORIGIN=http://localhost:8080 orbit-web:local
 ```
 
-部署配置依据 Railway [Config as Code](https://docs.railway.com/config-as-code/reference) 与 [健康检查](https://docs.railway.com/deployments/healthchecks)。跨域配置使用 [tower-http CORS](https://docs.rs/tower-http/latest/tower_http/cors/struct.CorsLayer.html)，静态回退使用 [Nginx try_files](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files)。Railway 部署健康检查不替代持续监控，请另设外部探测。
+部署配置依据 Railway [Dockerfile 构建](https://docs.railway.com/builds/dockerfiles)、[旧版配置弃用说明](https://docs.railway.com/config-as-code)与[健康检查](https://docs.railway.com/deployments/healthchecks)。跨域配置使用 [tower-http CORS](https://docs.rs/tower-http/latest/tower_http/cors/struct.CorsLayer.html)，静态回退使用 [Nginx try_files](https://nginx.org/en/docs/http/ngx_http_core_module.html#try_files)。Railway 部署健康检查不替代持续监控，请另设外部探测。
 
 ### 可用性边界
 
