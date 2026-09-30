@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
 import { useSearchParams } from 'react-router-dom';
 import { CONVERSATION_ID } from '../../layout/navigation';
@@ -8,14 +8,15 @@ import { SourcePicker } from './SourcePicker';
 import { ConnectionCard } from './ConnectionCard';
 import { Spinner } from '../../components/Feedback';
 import { DocumentView } from './DocumentView';
-import type { Snapshot, Source, Document } from './types';
+import { useCommunicationSnapshot } from './useCommunicationSnapshot';
+import type { Source, Document } from './types';
 
 // 大量自动订阅会话按页展示，避免一次渲染全部操作面板。
 const SOURCE_PAGE_SIZE = 25;
 
 /** 飞书资料的独立管理入口；授权、选择来源和删除分别是明确的用户动作。 */
 export function Communications({ report }: { report: (e: unknown) => void }) {
-  const [data, setData] = useState<Snapshot | null>(null);
+  const { data, error: loadError, loading, load } = useCommunicationSnapshot();
   const [searchParams, setSearchParams] = useSearchParams();
   const documentId = searchParams.get('communication');
   const selected = documentId && CONVERSATION_ID.test(documentId) ? documentId : null;
@@ -36,18 +37,12 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [outcome] = useState(() => new URLSearchParams(location.search).get('feishu'));
-  const load = useCallback(async () => setData(await api<Snapshot>('/communications/status')), []);
   useEffect(() => {
     if (!searchParams.has('feishu')) return;
     const next = new URLSearchParams(searchParams);
     next.delete('feishu');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
-  useEffect(() => {
-    void load().catch(report);
-    const timer = setInterval(() => void load().catch(report), 10000);
-    return () => clearInterval(timer);
-  }, [load, report]);
   /** 导航到飞书授权页，凭证交换始终在服务端完成。 */
   async function connect() {
     setBusy(true);
@@ -140,7 +135,20 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
           授权未完成。请确认账号在白名单内，应用权限和回调地址已配置，再重新连接。
         </p>
       )}
-      {!data ? (
+      {loadError && (
+        <section className="settings-card communication-card" role="alert">
+          <h2>{data ? '连接状态暂未更新' : '暂时无法读取连接状态'}</h2>
+          <p>{loadError}</p>
+          <p>
+            {data ? '以下保留上次读取的内容。' : '这不代表飞书已断开或后台历史任务已停止。'}
+            页面会自动重试。
+          </p>
+          <button disabled={loading} onClick={() => void load()}>
+            {loading ? '正在重试…' : '重新读取'}
+          </button>
+        </section>
+      )}
+      {!data && loadError ? null : !data ? (
         <div className="loading-row">
           <Spinner />
           正在读取连接状态…
@@ -229,6 +237,7 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                           <span>
                             文字资料可用 {p.ready}/{p.total} 天
                           </span>
+                          {p.checking > 0 && <span>统计更新中 {p.checking} 天</span>}
                           {p.summarizing > 0 && <span>待整理 {p.summarizing} 天</span>}
                           {p.indexing > 0 && <span>索引处理中 {p.indexing} 天</span>}
                           {p.errors > 0 && (

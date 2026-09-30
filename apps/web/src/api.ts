@@ -42,6 +42,7 @@ const ERRORS: Record<string, string> = {
   storage_unavailable: '存储暂时不可用，请稍后再试。',
   invalid_link_options: '请填写名称，并设置 1 分钟至 30 天的有效期。',
   request_timeout: '服务响应超时，请重试。',
+  service_unavailable: '服务暂时不可用，请稍后重试。',
   conversation_not_found: '这个对话不存在或你没有访问权限。',
 };
 
@@ -63,7 +64,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     headers: { 'Content-Type': 'application/json', ...options.headers },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(response.status, data.error || 'request_failed');
+  if (!response.ok)
+    throw new ApiError(
+      response.status,
+      data.error ||
+        (response.status === 504 || response.status === 408
+          ? 'request_timeout'
+          : response.status >= 500
+            ? 'service_unavailable'
+            : 'request_failed'),
+    );
   return data as T;
 }
 
