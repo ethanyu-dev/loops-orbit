@@ -1,89 +1,53 @@
 use super::*;
 
-// 验证自动发现只从开启时间订阅、不回填历史、重复发现幂等和移除排除；上游是本地协议夹具。
+// 验证默认不订阅、加载候选无副作用、显式订阅幂等；不验证真实飞书租户。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn discovery_since_and_exclusion() {
+async fn manual_subscription_is_explicit() {
     let (h, _, server) = setup().await;
     let cookie = h.login().await;
     connect(&h, &cookie).await;
-    communications::subscription::discover(&h.state)
-        .await
-        .unwrap();
-    let (id, start, watermark): (Uuid, i64, i64) =
-        sqlx::query_as("SELECT id,start_at,watermark FROM communication_sources")
-            .fetch_one(&h.state.pool)
-            .await
-            .unwrap();
-    let since: i64 = sqlx::query_scalar("SELECT subscription_since FROM communication_connections")
+    let auto: bool = sqlx::query_scalar("SELECT auto_subscribe FROM communication_connections")
         .fetch_one(&h.state.pool)
         .await
         .unwrap();
-    assert_eq!(start, since);
-    assert_eq!(watermark, since);
-    for _ in 0..2 {
-        due(&h).await;
-        communications::sync::step(&h.state).await.unwrap();
-    }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_documents")
-        .fetch_one(&h.state.pool)
-        .await
-        .unwrap();
-    assert_eq!(count, 0, "过去的夹具消息必须被过滤");
-    sqlx::query("UPDATE communication_connections SET next_discovery=now()")
-        .execute(&h.state.pool)
-        .await
-        .unwrap();
-    communications::subscription::discover(&h.state)
-        .await
-        .unwrap();
+    assert!(!auto);
     assert_eq!(
-        h.request(
-            "DELETE",
-            &format!("/api/communications/sources/{id}"),
-            Some(&cookie),
-            json!({})
-        )
-        .await
-        .0,
+        h.request("GET", "/api/communications/chats", Some(&cookie), json!({}))
+            .await
+            .0,
         StatusCode::OK
     );
-    sqlx::query("UPDATE communication_connections SET next_discovery=now()")
-        .execute(&h.state.pool)
-        .await
-        .unwrap();
-    communications::subscription::discover(&h.state)
-        .await
-        .unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_sources")
         .fetch_one(&h.state.pool)
         .await
         .unwrap();
     assert_eq!(count, 0);
-    assert_eq!(
-        h.request(
-            "PUT",
-            "/api/communications/settings",
-            None,
-            json!({"auto_subscribe":false})
-        )
+    for _ in 0..2 {
+        subscribe_fixture(&h, &cookie).await;
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_sources")
+        .fetch_one(&h.state.pool)
         .await
-        .0,
-        StatusCode::UNAUTHORIZED
-    );
+        .unwrap();
+    assert_eq!(count, 1);
+    server.abort();
+    h.close().await;
+}
+
+/// 测试夹具显式选择来源，不能依靠授权时自动订阅。
+async fn subscribe_fixture(h: &Harness, cookie: &str) {
     assert_eq!(
         h.request(
-            "PUT",
-            "/api/communications/settings",
-            Some(&cookie),
-            json!({"auto_subscribe":false})
+            "POST",
+            "/api/communications/sources",
+            Some(cookie),
+            json!({"chat_id":"oc_fixture","label":"测试沟通"})
         )
         .await
         .0,
         StatusCode::OK
     );
-    server.abort();
-    h.close().await;
 }
 
 // 验证手选历史独立于增量水位、重复补录不增版本、错误日期被拒绝；不验证飞书实际历史覆盖范围。
@@ -93,9 +57,7 @@ async fn history_is_independent_and_idempotent() {
     let (h, fixture, server) = setup().await;
     let cookie = h.login().await;
     connect(&h, &cookie).await;
-    communications::subscription::discover(&h.state)
-        .await
-        .unwrap();
+    subscribe_fixture(&h, &cookie).await;
     let (id, watermark): (Uuid, i64) =
         sqlx::query_as("SELECT id,watermark FROM communication_sources")
             .fetch_one(&h.state.pool)
@@ -665,6 +627,57 @@ async fn daily_messages_are_not_capped_at_five() {
         last["messages"][9]["sender_name"],
         "应用机器人（名称未获取）"
     );
+    server.abort();
+    h.close().await;
+}
+
+/// 验证日期探测的边界、认证和无订阅副作用；仅使用模拟消息，不验证租户历史完整性。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn activity_range_is_read_only_and_validated() {
+    let (h, fixture, server) = setup().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let day = chrono::DateTime::from_timestamp_millis(fixture.lock().unwrap().base)
+        .unwrap()
+        .with_timezone(&chrono_tz::Asia::Shanghai)
+        .date_naive();
+    for (date, expected) in [(day, true), (day.pred_opt().unwrap(), false)] {
+        let input = json!({"chat_id":"oc_fixture","range":{"start_date":date.to_string(),"end_date":date.to_string()}});
+        let (status, _, result) = h
+            .request(
+                "POST",
+                "/api/communications/chats/activity",
+                Some(&cookie),
+                input,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(result["active"], expected);
+    }
+    let input = json!({"chat_id":"oc_fixture","range":{"start_date":"bad","end_date":"bad"}});
+    assert_eq!(
+        h.request(
+            "POST",
+            "/api/communications/chats/activity",
+            Some(&cookie),
+            input.clone()
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        h.request("POST", "/api/communications/chats/activity", None, input)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM communication_sources")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
     server.abort();
     h.close().await;
 }

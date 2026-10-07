@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from '../../api';
-import { useSearchParams } from 'react-router-dom';
+import { NavLink, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { CONVERSATION_ID } from '../../layout/navigation';
 import { HistoryProgress } from './HistoryProgress';
 import { HistoryImport } from './HistoryImport';
@@ -11,24 +11,22 @@ import { DocumentView } from './DocumentView';
 import { useCommunicationSnapshot } from './useCommunicationSnapshot';
 import type { Source, Document } from './types';
 
-// 大量自动订阅会话按页展示，避免一次渲染全部操作面板。
+// 大量已订阅会话按页展示，避免一次渲染全部操作面板。
 const SOURCE_PAGE_SIZE = 25;
 
 /** 飞书资料的独立管理入口；授权、选择来源和删除分别是明确的用户动作。 */
 export function Communications({ report }: { report: (e: unknown) => void }) {
   const { data, error: loadError, loading, load } = useCommunicationSnapshot();
   const [searchParams, setSearchParams] = useSearchParams();
-  const documentId = searchParams.get('communication');
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const documentId = pathname.match(/^\/communications\/records\/([^/]+)$/)?.[1];
   const selected = documentId && CONVERSATION_ID.test(documentId) ? documentId : null;
-  /** 文档选择同步到 URL，刷新和浏览器返回时保留可核对的资料位置。 */
-  function setSelected(id: string | null) {
-    setSearchParams((previous) => {
-      const next = new URLSearchParams(previous);
-      if (id) next.set('communication', id);
-      else next.delete('communication');
-      return next;
-    });
-  }
+  const section = pathname.startsWith('/communications/sources')
+    ? 'sources'
+    : pathname.startsWith('/communications/sync')
+      ? 'sync'
+      : 'records';
   const [historyRevision, setHistoryRevision] = useState(0);
   const [query, setQuery] = useState('');
   const [sourceQuery, setSourceQuery] = useState('');
@@ -63,7 +61,6 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       setConfirmation(null);
-      setSelected(null);
       setResults(null);
       await load();
     } catch (e) {
@@ -120,15 +117,38 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
     page * SOURCE_PAGE_SIZE,
     (page + 1) * SOURCE_PAGE_SIZE,
   );
+  const legacy = searchParams.get('communication');
+  if (legacy && CONVERSATION_ID.test(legacy))
+    return <Navigate replace to={`/communications/records/${legacy}`} />;
+  if (pathname === '/communications')
+    return <Navigate replace to={`/communications/records${location.search}`} />;
+  if (selected)
+    return (
+      <DocumentView
+        key={selected}
+        id={selected}
+        report={report}
+        onClose={() => void navigate('/communications/records')}
+      />
+    );
+  if (
+    !['/communications/records', '/communications/sync', '/communications/sources'].includes(
+      pathname,
+    )
+  )
+    return (
+      <div className="settings-page">
+        <h1>页面不存在</h1>
+        <NavLink to="/communications/records">返回沟通记录</NavLink>
+      </div>
+    );
   return (
     <div className="settings-page communication-page">
-      <div className="page-eyebrow">CONNECTIONS / FEISHU</div>
       <div className="communication-heading">
         <div>
-          <h1>沟通，从此有了上下文。</h1>
-          <p className="page-description">把散落的讨论，连接成属于你的知识。</p>
+          <h1>飞书沟通资料</h1>
+          <p className="page-description">查找沟通记录，管理同步范围。</p>
         </div>
-        <span className="tag">飞书沟通资料</span>
       </div>
       {outcome === 'failed' && (
         <p className="connection-error" role="alert">
@@ -160,9 +180,6 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
         </section>
       ) : (
         <>
-          {data.connection && (
-            <HistoryProgress revision={historyRevision} documents={data.progress} />
-          )}
           <ConnectionCard
             data={data}
             busy={busy}
@@ -172,135 +189,123 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
           />
           {data.connection && (
             <>
-              <section className="settings-card communication-card">
-                <h2>自动订阅新消息</h2>
-                <p>
-                  自动发现授权范围内的单聊和群聊，约每 10
-                  分钟同步新增消息。已移除的会话不会自动加回。
-                </p>
-                <label className="subscription-switch">
-                  <input
-                    type="checkbox"
-                    checked={data.connection.auto_subscribe}
-                    disabled={busy}
-                    onChange={(e) =>
-                      void change('/settings', 'PUT', { auto_subscribe: e.target.checked })
-                    }
-                  />
-                  自动订阅新发现的会话
-                </label>
-                <p>
-                  从 {new Date(data.connection.subscription_since * 1000).toLocaleString()}{' '}
-                  起收集新消息。关闭自动发现后，已有订阅仍继续同步，可在下方逐个暂停。
-                </p>
-                {data.connection.discovery_error && (
-                  <p role="alert">会话发现暂时失败，将自动重试。请检查飞书授权。</p>
-                )}
-              </section>
-              <HistoryImport
-                data={data}
-                reload={load}
-                report={report}
-                onQueued={() => {
-                  setHistoryRevision((value) => value + 1);
-                  const panel = document.getElementById('history-progress');
-                  panel?.focus({ preventScroll: true });
-                  panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }}
-              />
-              <details className="connection-details">
-                <summary>手动补充订阅</summary>
-                <SourcePicker report={report} onAdded={load} />
-              </details>
-              <section className="settings-card communication-card">
-                <h2>已订阅会话 · {data.sources.length}</h2>
-                {!data.sources.length && <p>等待发现可访问的会话，也可以手动补充订阅。</p>}
-                <label>
-                  查找已订阅会话
-                  <input
-                    value={sourceQuery}
-                    placeholder="输入联系人或群聊名称"
-                    onChange={(e) => {
-                      setSourceQuery(e.target.value);
-                      setSourcePage(0);
+              <nav className="communication-tabs" aria-label="飞书资料分区">
+                <NavLink to="/communications/records">沟通记录</NavLink>
+                <NavLink to="/communications/sync">历史导入与进度</NavLink>
+                <NavLink to="/communications/sources">订阅管理 · {data.sources.length}</NavLink>
+              </nav>
+              {section === 'sources' && (
+                <div>
+                  <SourcePicker report={report} onAdded={load} sources={data.sources} />
+                  <section className="settings-card communication-card">
+                    <h2>已订阅会话 · {data.sources.length}</h2>
+                    {!data.sources.length && <p>尚未订阅会话，请在上方勾选后订阅。</p>}
+                    <label>
+                      查找已订阅会话
+                      <input
+                        value={sourceQuery}
+                        placeholder="输入联系人或群聊名称"
+                        onChange={(e) => {
+                          setSourceQuery(e.target.value);
+                          setSourcePage(0);
+                        }}
+                      />
+                    </label>
+                    {visibleSources.map((source) => (
+                      <article className="communication-evidence" key={source.id}>
+                        <strong>{source.label}</strong>
+                        <p>{status(source)}</p>
+                        {data.progress
+                          .filter((p) => p.source_id === source.id)
+                          .map((p) => (
+                            <div className="source-progress" key={p.source_id}>
+                              <span>
+                                文字资料可用 {p.ready}/{p.total} 天
+                              </span>
+                              {p.checking > 0 && <span>统计更新中 {p.checking} 天</span>}
+                              {p.summarizing > 0 && <span>待整理 {p.summarizing} 天</span>}
+                              {p.indexing > 0 && <span>索引处理中 {p.indexing} 天</span>}
+                              {p.errors > 0 && (
+                                <span className="error-text">整理失败 {p.errors} 天</span>
+                              )}
+                              {p.images > 0 && (
+                                <span>
+                                  图片解读 {p.images_ready}/{p.images}
+                                  {p.images_failed > 0 ? ` · ${p.images_failed} 张失败重试中` : ''}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        <div className="source-actions">
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              void change(`/sources/${source.id}`, 'PUT', {
+                                version: source.version,
+                                enabled: !source.enabled,
+                              })
+                            }
+                          >
+                            {source.enabled ? '暂停同步与检索' : '恢复同步与检索'}
+                          </button>
+                          <button
+                            disabled={busy || !source.enabled}
+                            onClick={() => void change(`/sources/${source.id}/sync`, 'POST')}
+                          >
+                            同步最新消息
+                          </button>
+                          <details className="source-more">
+                            <summary>更多</summary>
+                            <button
+                              className="danger-action"
+                              disabled={busy}
+                              onClick={() => setConfirmation(source.id)}
+                            >
+                              移除会话并删除资料
+                            </button>
+                          </details>
+                        </div>
+                      </article>
+                    ))}
+                    {filteredSources.length === 0 && data.sources.length > 0 && (
+                      <p>没有匹配的会话。</p>
+                    )}
+                    {filteredSources.length > SOURCE_PAGE_SIZE && (
+                      <div className="communication-row">
+                        <button disabled={page === 0} onClick={() => setSourcePage(page - 1)}>
+                          上一页会话
+                        </button>
+                        <span>
+                          第 {page + 1}/{Math.ceil(filteredSources.length / SOURCE_PAGE_SIZE)} 页 ·{' '}
+                          {filteredSources.length} 个会话
+                        </span>
+                        <button
+                          disabled={(page + 1) * SOURCE_PAGE_SIZE >= filteredSources.length}
+                          onClick={() => setSourcePage(page + 1)}
+                        >
+                          下一页会话
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+              {section === 'sync' && (
+                <div>
+                  <HistoryProgress revision={historyRevision} documents={data.progress} />
+                  <HistoryImport
+                    data={data}
+                    reload={load}
+                    report={report}
+                    onQueued={() => {
+                      setHistoryRevision((value) => value + 1);
+                      const panel = document.getElementById('history-progress');
+                      panel?.focus({ preventScroll: true });
+                      panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }}
                   />
-                </label>
-                {visibleSources.map((source) => (
-                  <article className="communication-evidence" key={source.id}>
-                    <strong>{source.label}</strong>
-                    <p>{status(source)}</p>
-                    {data.progress
-                      .filter((p) => p.source_id === source.id)
-                      .map((p) => (
-                        <div className="source-progress" key={p.source_id}>
-                          <span>
-                            文字资料可用 {p.ready}/{p.total} 天
-                          </span>
-                          {p.checking > 0 && <span>统计更新中 {p.checking} 天</span>}
-                          {p.summarizing > 0 && <span>待整理 {p.summarizing} 天</span>}
-                          {p.indexing > 0 && <span>索引处理中 {p.indexing} 天</span>}
-                          {p.errors > 0 && (
-                            <span className="error-text">整理失败 {p.errors} 天</span>
-                          )}
-                          {p.images > 0 && (
-                            <span>
-                              图片解读 {p.images_ready}/{p.images}
-                              {p.images_failed > 0 ? ` · ${p.images_failed} 张失败重试中` : ''}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    <div className="source-actions">
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void change(`/sources/${source.id}`, 'PUT', {
-                            version: source.version,
-                            enabled: !source.enabled,
-                          })
-                        }
-                      >
-                        {source.enabled ? '暂停同步与检索' : '恢复同步与检索'}
-                      </button>
-                      <button
-                        disabled={busy || !source.enabled}
-                        onClick={() => void change(`/sources/${source.id}/sync`, 'POST')}
-                      >
-                        同步最新消息
-                      </button>
-                      <details className="source-more">
-                        <summary>更多</summary>
-                        <button
-                          className="danger-action"
-                          disabled={busy}
-                          onClick={() => setConfirmation(source.id)}
-                        >
-                          移除会话并删除资料
-                        </button>
-                      </details>
-                    </div>
-                  </article>
-                ))}
-                {filteredSources.length === 0 && data.sources.length > 0 && <p>没有匹配的会话。</p>}
-                {filteredSources.length > SOURCE_PAGE_SIZE && (
-                  <div className="communication-row">
-                    <button disabled={page === 0} onClick={() => setSourcePage(page - 1)}>
-                      上一页会话
-                    </button>
-                    <span>
-                      第 {page + 1}/{Math.ceil(filteredSources.length / SOURCE_PAGE_SIZE)} 页 ·{' '}
-                      {filteredSources.length} 个会话
-                    </span>
-                    <button
-                      disabled={(page + 1) * SOURCE_PAGE_SIZE >= filteredSources.length}
-                      onClick={() => setSourcePage(page + 1)}
-                    >
-                      下一页会话
-                    </button>
-                  </div>
-                )}
-              </section>
+                </div>
+              )}
               {confirmation && (
                 <section className="settings-card communication-card" role="alert">
                   <h2>移除并删除资料？</h2>
@@ -309,7 +314,7 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                     {confirmation === 'connection'
                       ? '所有导入资料和本地授权凭证'
                       : '此会话的原文、图片解读、摘要和检索索引'}
-                    ，并停止依赖这些资料的提醒。移除的会话不会被自动订阅加回，飞书中的原始消息不受影响。已发送的聊天记录仍可查看，相关旧上下文会停止参与后续回答。
+                    ，并停止依赖这些资料的提醒。飞书中的原始消息不受影响。已发送的聊天记录仍可查看，相关旧上下文会停止参与后续回答。
                   </p>
                   <button
                     disabled={busy}
@@ -325,56 +330,54 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
                   <button onClick={() => setConfirmation(null)}>取消</button>
                 </section>
               )}
-              <section className="settings-card communication-card">
-                <h2>查找沟通记录</h2>
-                <form onSubmit={(event) => void find(event)}>
-                  <label>
-                    关键词或问题
-                    <input
-                      value={query}
-                      maxLength={2000}
-                      onChange={(e) => setQuery(e.target.value)}
-                      placeholder="上次关于上线时间是怎么约定的？"
-                    />
-                  </label>
-                  <button disabled={busy}>检索</button>
-                  {results && (
-                    <button type="button" onClick={() => setResults(null)}>
-                      返回最近资料
-                    </button>
-                  )}
-                </form>
-                {(results || data.documents).map((doc) => (
-                  <button
-                    className="communication-document"
-                    key={doc.id}
-                    onClick={() => setSelected(doc.id)}
-                  >
-                    <span>
-                      {data.sources.find((source) => source.id === doc.source_id)?.label ||
-                        '沟通记录'}{' '}
-                      · {doc.day}
-                    </span>
-                    <small>
-                      {doc.summary_hash
-                        ? '查看整理与原文'
-                        : doc.summary_error
-                          ? '整理失败，将自动重试'
-                          : '等待整理'}
-                    </small>
-                  </button>
-                ))}
-                {!(results || data.documents).length && (
-                  <p>{results ? '没有找到匹配资料。' : '选定会话后，记录将在后台逐步导入。'}</p>
-                )}
-              </section>
-              {selected && (
-                <DocumentView
-                  key={selected}
-                  id={selected}
-                  report={report}
-                  onClose={() => setSelected(null)}
-                />
+              {section === 'records' && (
+                <div>
+                  <section className="settings-card communication-card">
+                    <h2>沟通记录</h2>
+                    <form className="communication-search" onSubmit={(event) => void find(event)}>
+                      <label>
+                        关键词或问题
+                        <input
+                          value={query}
+                          maxLength={2000}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder="上次关于上线时间是怎么约定的？"
+                        />
+                      </label>
+                      <button disabled={busy}>检索</button>
+                      {results && (
+                        <button type="button" onClick={() => setResults(null)}>
+                          返回最近资料
+                        </button>
+                      )}
+                    </form>
+                    {(results || data.documents).map((doc) => (
+                      <NavLink
+                        className="communication-document"
+                        key={doc.id}
+                        to={`/communications/records/${doc.id}`}
+                      >
+                        <span>
+                          {data.sources.find((source) => source.id === doc.source_id)?.label ||
+                            '沟通记录'}{' '}
+                          · {doc.day}
+                        </span>
+                        <small>
+                          {doc.extraction_version === 0
+                            ? '正在核对关联范围'
+                            : doc.summary_hash
+                              ? '查看整理与原文'
+                              : doc.summary_error
+                                ? '整理失败，将自动重试'
+                                : '等待整理'}
+                        </small>
+                      </NavLink>
+                    ))}
+                    {!(results || data.documents).length && (
+                      <p>{results ? '没有找到匹配资料。' : '选定会话后，记录将在后台逐步导入。'}</p>
+                    )}
+                  </section>
+                </div>
               )}
             </>
           )}

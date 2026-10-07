@@ -20,10 +20,6 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(index))
-        .route(
-            "/settings",
-            axum::routing::put(super::subscription::settings),
-        )
         .route("/history", post(super::history::batch))
         .route("/history/cancel", post(super::history::cancel))
         .route("/history/progress", get(super::history::progress))
@@ -36,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/oauth/callback", get(oauth::callback))
         .route("/connection", delete(disconnect))
         .route("/chats", get(chats))
+        .route("/chats/activity", post(super::extraction::activity))
         .route("/sources", post(add))
         .route("/sources/{id}", axum::routing::put(update).delete(remove))
         .route("/sources/{id}/sync", post(sync_now))
@@ -66,7 +63,7 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
         json!({"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
     ))
 }
-/// 浏览器按页加载可见会话，供手动补录历史或添加未自动发现的会话。
+/// 浏览器按页加载候选，读取列表不会创建订阅。
 #[derive(Deserialize)]
 struct ChatPage {
     /// 上游不透明游标。
@@ -95,6 +92,21 @@ async fn chats(
         ("page_token", page.page_token.as_str()),
     ]))
     .await?;
+    for item in data["data"]["items"]
+        .as_array()
+        .ok_or_else(|| unavailable("缺少会话列表"))?
+    {
+        if let (Some(id), Some(mode)) = (item["chat_id"].as_str(), item["chat_mode"].as_str())
+            && matches!(mode, "p2p" | "group" | "topic")
+        {
+            let mode = if mode == "topic" { "group" } else { mode };
+            sqlx::query("UPDATE communication_sources SET chat_mode=$2 WHERE chat_id=$1")
+                .bind(id)
+                .bind(mode)
+                .execute(&state.pool)
+                .await?;
+        }
+    }
     let items=data["data"]["items"].as_array().ok_or_else(||unavailable("缺少会话列表"))?.iter().take(50).map(|item|json!({"chat_id":item["chat_id"],"name":item["name"],"chat_mode":item["chat_mode"]})).collect::<Vec<_>>();
     Ok(Json(
         json!({"items":items,"has_more":data["data"]["has_more"],"page_token":data["data"]["page_token"]}),
@@ -143,10 +155,16 @@ async fn add(
         ("page_size", "1"),
     ]))
     .await?;
+    let mode = super::extraction::lookup_mode(&state, &input.chat_id, &token).await?;
     let now = chrono::Utc::now().timestamp();
     let start = now - input.days * 86400;
     let id:Uuid=sqlx::query_scalar("INSERT INTO communication_sources(id,owner,chat_id,label,start_at,watermark,day_timezone) VALUES($1,'admin',$2,$3,$4,$4,'Asia/Shanghai') ON CONFLICT(owner,chat_id) DO UPDATE SET label=excluded.label RETURNING id")
         .bind(Uuid::new_v4()).bind(&input.chat_id).bind(input.label.trim()).bind(start).fetch_one(&state.pool).await?;
+    sqlx::query("UPDATE communication_sources SET chat_mode=$2 WHERE id=$1")
+        .bind(id)
+        .bind(mode)
+        .execute(&state.pool)
+        .await?;
     sqlx::query("DELETE FROM communication_exclusions WHERE owner='admin' AND chat_id=$1")
         .bind(input.chat_id)
         .execute(&state.pool)
@@ -285,11 +303,22 @@ async fn document(
         .fetch_optional(&state.pool)
         .await?
         .ok_or(ApiError(StatusCode::NOT_FOUND, "communication_not_found"))?;
+    let source_label: String =
+        sqlx::query_scalar("SELECT label FROM communication_sources WHERE id=$1")
+            .bind(doc.source_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if doc.extraction_version != 1 {
+        return Ok(Json(
+            json!({"source_label":source_label,"document":doc,"summary":null,"total":0,"messages":[],"processing":true}),
+        ));
+    }
     let raw = store::raw(&state, &doc)?;
     let image_notes = super::images::notes(&state, &doc).await?;
     let messages: Vec<_>=raw.iter().skip(page.offset).take(50).map(|m| {
         let mut value=serde_json::to_value(m).expect("消息可序列化");
         value["sender_name"]=json!(m.display_name());
+        value["relation"]=m.payload["relation"].clone();
         value["images"]=json!(super::images::keys(m).iter().enumerate().map(|(index,key)|json!({"reference_only":index>=20,"url":format!("/api/communications/documents/{}/images/{}/{}",doc.id,m.message_id,index),"description":image_notes.iter().find(|n|n.message_id==m.message_id && n.image_key==*key).and_then(|n|n.description.as_ref()),"error":image_notes.iter().find(|n|n.message_id==m.message_id && n.image_key==*key).and_then(|n|n.error.as_ref())})).collect::<Vec<_>>());
         value
     }).collect();
@@ -308,7 +337,7 @@ async fn document(
         v
     });
     Ok(Json(
-        json!({"document":doc,"summary":summary,"total":raw.len(),"messages":messages}),
+        json!({"source_label":source_label,"document":doc,"summary":summary,"total":raw.len(),"messages":messages}),
     ))
 }
 /// 查询正文限长，与聊天检索复用同一身份边界。

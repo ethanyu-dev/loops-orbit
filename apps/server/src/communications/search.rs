@@ -35,7 +35,7 @@ pub(crate) async fn allowed(state: &AppState, owner: &str) -> ApiResult<bool> {
 /// 文件读取前先限制来源，缺失或被编辑的文件不退回数据库旧正文。
 pub(crate) async fn documents(state: &AppState) -> ApiResult<Vec<Document>> {
     let sql = format!(
-        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE source_id IN(SELECT id FROM communication_sources WHERE enabled) ORDER BY day DESC,id"
+        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE extraction_version=1 AND source_id IN(SELECT id FROM communication_sources WHERE enabled) ORDER BY day DESC,id"
     );
     Ok(sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(&state.pool)
@@ -289,7 +289,7 @@ pub(crate) async fn context(
                 .unwrap_or_default()
         };
         let link = format!(
-            "{}/communications?communication={}",
+            "{}/communications/records/{}",
             state.config.public_url, hit.document.id
         );
         let notes = super::images::notes(state, &hit.document).await?;

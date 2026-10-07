@@ -54,7 +54,13 @@ export function Chat({
           <p>聊聊正在发生的事，让 Orbit 和你一起往前走。</p>
         </div>
       ) : (
-        <MessageList detail={detail} pending={pending} loading={loading} report={report} />
+        <MessageList
+          key={selected}
+          detail={detail}
+          pending={pending}
+          loading={loading}
+          report={report}
+        />
       )}
       {failedSends.map((failedSend) => (
         <div className="send-retry" role="alert" key={failedSend.key}>

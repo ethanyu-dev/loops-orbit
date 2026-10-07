@@ -19,6 +19,8 @@ export interface Source {
 }
 /** 本地日文件的可审阅版本。 */
 export interface Document {
+  /** 旧资料核对完成后为 1，核对期间不提供旧摘要。 */
+  extraction_version?: number;
   /** 文档标识。 */
   id: string;
   /** 所属会话选择。 */
@@ -53,6 +55,10 @@ export interface Item {
 }
 /** 分页详情明确未解析消息的范围。 */
 export interface Detail {
+  /** 文档所属会话的可读名称。 */
+  source_label?: string;
+  /** 旧资料正在按个人关联规则重新处理。 */
+  processing?: boolean;
   /** 文件版本。 */
   document: Document;
   /** 尚未完成整理时为空。 */
@@ -62,6 +68,8 @@ export interface Detail {
   /** 当前页原文，附件仅显示类型。 */
   messages: {
     message_id: string;
+    /** 服务端依据身份与提及关系计算的保留原因。 */
+    relation?: string;
     text: string;
     sender_id: string;
     /** 服务端解析的可读名称，缺失时使用会话成员。 */

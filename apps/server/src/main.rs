@@ -60,6 +60,9 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    orbit_server::communications::sync::initialize_scope(&state)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.1))?;
     let (stop, receiver) = watch::channel(false);
     let mut workers = JoinSet::new();
     for _ in 0..state.config.workers {

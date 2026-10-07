@@ -73,7 +73,7 @@ pub(super) async fn batch(
     Ok(Json(json!({"count": jobs.len()})))
 }
 /// 日期解析独立于选源；结束日期转为次日午夜，再由入队快照限制到当前时刻。
-fn range(input: &HistoryRange) -> ApiResult<(i64, i64)> {
+pub(super) fn range(input: &HistoryRange) -> ApiResult<(i64, i64)> {
     use chrono::TimeZone;
     let invalid = || ApiError(StatusCode::BAD_REQUEST, "invalid_history_range");
     let start =

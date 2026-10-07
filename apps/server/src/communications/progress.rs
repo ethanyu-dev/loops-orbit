@@ -31,7 +31,7 @@ pub(super) async fn read(state: &AppState) -> ApiResult<Vec<Value>> {
         'images',COALESCE(sum(p.images),0),'images_ready',COALESCE(sum(p.images_ready),0),
         'images_failed',COALESCE(sum(p.images_failed),0),'checked_at',min(p.checked_at))
         FROM communication_documents d LEFT JOIN communication_document_progress p
-        ON p.document_id=d.id AND p.version=d.version
+        ON p.document_id=d.id AND p.version=d.version AND d.extraction_version=1
         AND p.summary_hash IS NOT DISTINCT FROM d.summary_hash
         AND p.summary_error IS NOT DISTINCT FROM d.summary_error AND p.embedding_version=$1
         GROUP BY d.source_id ORDER BY d.source_id",

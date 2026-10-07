@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { apiUrl } from '../../config';
-import { ArrowUpRight, Check, Copy, FileText, MessageSquare, ShieldCheck } from 'lucide-react';
-import { OrbitMark } from '../../components/OrbitMark';
+import { ArrowUpRight, Check, Copy, MessageSquare } from 'lucide-react';
 import { Spinner } from '../../components/Feedback';
 import type { Snapshot } from './types';
 
@@ -38,25 +37,27 @@ export function ConnectionCard({
   }
   return (
     <>
-      <section className="connection-hero">
+      <section className={`connection-hero ${connected ? 'is-connected' : ''}`}>
         <div className="connection-copy">
           <div className="connection-status">
             <span className={connected ? 'status-dot' : 'neutral-dot'} />
             {connected ? '账号已连接' : data.connection ? '需要重新授权' : '等待连接'}
           </div>
-          <h2>
-            {data.connection
-              ? `你好，${data.connection.name}`
-              : '让重要的沟通，\n成为下一次对话的背景。'}
-          </h2>
-          <p>连接飞书，自动订阅今后的沟通。Orbit 会记下讨论中的决定和待办，让每次回答都有来处。</p>
+          <h2>{data.connection ? data.connection.name : '连接飞书'}</h2>
+          {!data.connection && (
+            <p>手动选择要订阅的会话，在对话中查找与你相关的讨论、决定和待办。</p>
+          )}
           {data.connection?.status === 'reauthorize' && (
             <p className="login-error" role="alert">
               授权已失效，采集已暂停。请重新授权后继续。
             </p>
           )}
           <div className="connection-actions">
-            <button className="primary-button" disabled={busy} onClick={() => void connect()}>
+            <button
+              className={connected ? 'secondary-button' : 'primary-button'}
+              disabled={busy}
+              onClick={() => void connect()}
+            >
               {busy ? <Spinner /> : <MessageSquare size={17} />}
               {data.connection ? '重新授权' : '连接我的飞书'}
               <ArrowUpRight size={17} />
@@ -67,55 +68,16 @@ export function ConnectionCard({
               </button>
             )}
           </div>
-          <span className="connection-assurance">
-            <ShieldCheck size={14} />
-            授权后自动同步新消息，历史范围由你选择
-          </span>
-        </div>
-        <div className="connection-visual" aria-hidden="true">
-          <div className="orbital-track" />
-          <div className="orbital-track second" />
-          <div className="connection-orbit">
-            <OrbitMark />
-          </div>
-          <span className="orbit-node node-message">
-            <MessageSquare size={24} />
-          </span>
-          <span className="orbit-node node-file">
-            <FileText size={22} />
-          </span>
-          <span className="orbit-node node-check">
-            <Check size={22} />
-          </span>
-          <span className="orbit-caption">每一次沟通，都有迹可循</span>
         </div>
       </section>
-      <div className="connection-steps" aria-label="连接步骤">
-        {[
-          ['01', '授权你的账号', '由你决定 Orbit 能访问什么。'],
-          ['02', '新消息自动同步', '历史消息按需选择日期整理。'],
-          ['03', '接着聊下去', '约每 10 分钟同步，保留原话出处。'],
-        ].map(([number, title, description], index) => (
-          <div key={number} className="connection-step">
-            <span>
-              {(index === 0 && connected) || (index === 1 && data.sources.length > 0) ? (
-                <Check size={15} />
-              ) : (
-                number
-              )}
-            </span>
-            <h3>{title}</h3>
-            <p>{description}</p>
-          </div>
-        ))}
-      </div>
       <details className="connection-details">
         <summary>数据范围与授权帮助</summary>
         <div className="connection-detail-grid">
           <div>
             <h3>你始终掌握范围</h3>
             <p>
-              自动收集授权范围内可发现、可读取会话的新消息，历史由你选择日期补录。资料仅供此管理员工作空间及同一飞书账号使用。文字和可访问的图片交给已配置的多模态模型整理，图片资源按需读取，不公开带授权的链接；文件和语音暂不解析。你可以暂停或移除会话。
+              仅同步你手动订阅的会话，历史由你选择日期补录。单聊保留全部消息；群聊只提取你发送、明确
+              @你或直接回复你的消息。资料仅供此管理员工作空间及同一飞书账号使用。文字和可访问的图片交给已配置的多模态模型整理，图片资源按需读取，不公开带授权的链接；文件和语音暂不解析。你可以暂停或移除会话。
             </p>
           </div>
           <div>

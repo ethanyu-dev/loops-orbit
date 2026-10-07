@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { ArrowDown, Check, Copy } from 'lucide-react';
+import { useMessageScroll } from './useMessageScroll';
 import { Answer } from './Answer';
 import type { Detail, Run } from '../../types';
 import { OrbitMark } from '../../components/OrbitMark';
@@ -25,11 +26,7 @@ export function MessageList({
   report: (error: unknown) => void;
 }) {
   const [copied, setCopied] = useState<number | null>(null);
-  const following = useRef(true);
-  const bottom = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (following.current) bottom.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [detail]);
+  const { viewport, content, atBottom, onScroll, scrollToLatest } = useMessageScroll();
   /** 复制状态局限于消息列表，不影响会话或任务状态。 */
   async function copy(id: number, content: string) {
     try {
@@ -41,99 +38,99 @@ export function MessageList({
     }
   }
   return (
-    <div
-      className="message-scroll"
-      onScroll={(event) => {
-        const view = event.currentTarget;
-        following.current = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
-      }}
-    >
-      {loading && (
-        <div className="loading-row">
-          <Spinner />
-          正在读取对话
-        </div>
-      )}
-      <div className="messages">
-        {detail.messages.map((message) => {
-          const run = detail.runs.find((r) => r.id === message.run_id);
-          return (
-            <Fragment key={message.id}>
-              <div className={`message ${message.role}`} key={message.id}>
-                {message.role === 'assistant' && (
-                  <div className="assistant-avatar">
-                    <OrbitMark small />
+    <div className="message-region">
+      <div className="message-scroll" ref={viewport} onScroll={onScroll}>
+        <div className="messages" ref={content}>
+          {loading && (
+            <div className="loading-row">
+              <Spinner />
+              正在读取对话
+            </div>
+          )}
+          {detail.messages.map((message) => {
+            const run = detail.runs.find((r) => r.id === message.run_id);
+            return (
+              <Fragment key={message.id}>
+                <div className={`message ${message.role}`} key={message.id}>
+                  {message.role === 'assistant' && (
+                    <div className="assistant-avatar">
+                      <OrbitMark small />
+                    </div>
+                  )}
+                  <div className="message-content">
+                    {message.role === 'assistant' ? (
+                      <>
+                        <div className="assistant-label">
+                          {message.kind === 'followup' ? 'Orbit · 主动消息' : 'Orbit'}
+                        </div>
+                        <Answer content={message.content} />
+                        <button
+                          className="copy-message"
+                          aria-label="复制回复"
+                          onClick={() => void copy(message.id, message.content)}
+                        >
+                          {copied === message.id ? <Check size={14} /> : <Copy size={14} />}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {message.content}
+                        {run?.status === 'cancelled' && (
+                          <small className="run-note">已停止回复</small>
+                        )}
+                        {run?.status === 'superseded' && (
+                          <small className="run-note">已与后续消息一起处理</small>
+                        )}
+                        {detail.runs.find((r) => r.id === message.run_id)?.status === 'failed' && (
+                          <div className="run-error">
+                            这次运行未完成。你可以重新发送消息。
+                            <small>{detail.runs.find((r) => r.id === message.run_id)?.error}</small>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+                {message.role === 'user' && run?.status === 'running' && run.partial_content && (
+                  <div className="message assistant" aria-busy="true">
+                    <div className="assistant-avatar">
+                      <OrbitMark small />
+                    </div>
+                    <div className="message-content">
+                      <div className="assistant-label">Orbit · 正在回复</div>
+                      <Answer content={run.partial_content} />
+                    </div>
                   </div>
                 )}
-                <div className="message-content">
-                  {message.role === 'assistant' ? (
-                    <>
-                      <div className="assistant-label">
-                        {message.kind === 'followup' ? 'Orbit · 主动消息' : 'Orbit'}
-                      </div>
-                      <Answer content={message.content} />
-                      <button
-                        className="copy-message"
-                        aria-label="复制回复"
-                        onClick={() => void copy(message.id, message.content)}
-                      >
-                        {copied === message.id ? <Check size={14} /> : <Copy size={14} />}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {message.content}
-                      {run?.status === 'cancelled' && (
-                        <small className="run-note">已停止回复</small>
-                      )}
-                      {run?.status === 'superseded' && (
-                        <small className="run-note">已与后续消息一起处理</small>
-                      )}
-                      {detail.runs.find((r) => r.id === message.run_id)?.status === 'failed' && (
-                        <div className="run-error">
-                          这次运行未完成。你可以重新发送消息。
-                          <small>{detail.runs.find((r) => r.id === message.run_id)?.error}</small>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-              {message.role === 'user' && run?.status === 'running' && run.partial_content && (
-                <div className="message assistant" aria-busy="true">
-                  <div className="assistant-avatar">
-                    <OrbitMark small />
-                  </div>
-                  <div className="message-content">
-                    <div className="assistant-label">Orbit · 正在回复</div>
-                    <Answer content={run.partial_content} />
-                  </div>
-                </div>
-              )}
-            </Fragment>
-          );
-        })}
-        {pending.length > 0 && (
-          <div className="thinking" role="status">
-            <OrbitMark small />
-            <span className="thinking-dots">
-              <i />
-              <i />
-              <i />
-            </span>
-            <span>
-              {pending.some((r) => r.phase === 'context')
-                ? '正在衔接前面的对话'
-                : pending.some((r) => r.partial_content)
-                  ? '正在回复'
-                  : pending.some((r) => r.status === 'running')
-                    ? '正在思考'
-                    : '正在接收你的补充'}
-            </span>
-          </div>
-        )}
-        <div ref={bottom} />
+              </Fragment>
+            );
+          })}
+          {pending.length > 0 && (
+            <div className="thinking" role="status">
+              <OrbitMark small />
+              <span className="thinking-dots">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span>
+                {pending.some((r) => r.phase === 'context')
+                  ? '正在衔接前面的对话'
+                  : pending.some((r) => r.partial_content)
+                    ? '正在回复'
+                    : pending.some((r) => r.status === 'running')
+                      ? '正在思考'
+                      : '正在接收你的补充'}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
+      {!atBottom && (
+        <button className="jump-to-latest" onClick={scrollToLatest} aria-label="回到最新消息">
+          <ArrowDown size={16} /> 最新消息
+        </button>
+      )}
     </div>
   );
 }

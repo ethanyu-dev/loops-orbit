@@ -30,7 +30,7 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
     .await?;
     let mut groups: BTreeMap<String, BTreeMap<String, store::Message>> = BTreeMap::new();
     for doc in &old {
-        for message in store::raw(state, doc)? {
+        for message in store::raw_unchecked(state, doc)? {
             let messages = groups.entry(day(message.create_time)?).or_default();
             if messages
                 .get(&message.message_id)
@@ -49,6 +49,11 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
             day,
             raw_hash: String::new(),
             version: previous.map_or(1, |d| d.version + 1),
+            extraction_version: if old.iter().all(|d| d.extraction_version == 1) {
+                1
+            } else {
+                0
+            },
             summary_hash: None,
             summary_error: None,
         };
@@ -56,7 +61,7 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
         messages
             .sort_by(|a, b| (a.create_time, &a.message_id).cmp(&(b.create_time, &b.message_id)));
         if let Some(previous) = previous
-            && store::raw(state, previous)? == messages
+            && store::raw_unchecked(state, previous)? == messages
         {
             doc = previous.clone();
         } else {
@@ -76,7 +81,10 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
         for doc in &changed {
             dependencies::cancel(state, Some(doc.id), None).await?;
         }
-        dependencies::invalidate_context(state).await?;
+        // 未核对资料已在启动时隔离；逐来源迁移不能反复推进新聊天的遗忘边界。
+        if changed.iter().any(|doc| doc.extraction_version == 1) {
+            dependencies::invalidate_context(state).await?;
+        }
     }
     let mut tx = state.pool.begin().await?;
     for doc in &changed {
@@ -90,7 +98,7 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
         .execute(&mut *tx)
         .await?;
     for doc in &current {
-        sqlx::query("INSERT INTO communication_documents(id,source_id,day,raw_hash,version,summary_hash,summary_error) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(doc.id).bind(doc.source_id).bind(&doc.day).bind(&doc.raw_hash).bind(doc.version).bind(&doc.summary_hash).bind(&doc.summary_error).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO communication_documents(id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(doc.id).bind(doc.source_id).bind(&doc.day).bind(&doc.raw_hash).bind(doc.version).bind(&doc.summary_hash).bind(&doc.summary_error).bind(doc.extraction_version).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE communication_sources SET day_timezone='Asia/Shanghai',version=version+1 WHERE id=$1").bind(source.id).execute(&mut *tx).await?;
     tx.commit().await?;

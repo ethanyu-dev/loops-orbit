@@ -1,18 +1,22 @@
-import { ChevronRight, Menu, ShieldCheck } from 'lucide-react';
+import { LogOut, Menu } from 'lucide-react';
 import { ThemeToggle } from '../features/theme/ThemeToggle';
 import type { Session } from '../types';
+import { formatDate } from '../lib/format';
 import type { Page } from './navigation';
 
-/** 顶栏显示当前功能与身份信息，移动端菜单由应用控制。 */
+/** 顶栏显示当前功能，移动端菜单由应用控制。 */
 export function Header({
   page,
   session,
+  onLogout,
   onOpenSidebar,
 }: {
-  /** 当前功能页，决定面包屑文字。 */
+  /** 当前功能页，决定标题文字。 */
   page: Page;
-  /** 当前身份与模型展示信息。 */
+  /** 当前身份用于展示角色与访客有效期。 */
   session: Session;
+  /** 退出由服务端 Cookie 维护的会话。 */
+  onLogout: () => Promise<void>;
   /** 请求应用展开移动端导航。 */
   onOpenSidebar: () => void;
 }) {
@@ -22,8 +26,6 @@ export function Header({
         <button className="icon-button mobile-menu" aria-label="打开侧栏" onClick={onOpenSidebar}>
           <Menu size={20} />
         </button>
-        <span className="breadcrumb">工作空间</span>
-        <ChevronRight size={13} />
         <strong>
           {page === 'communications'
             ? '飞书沟通资料'
@@ -40,14 +42,27 @@ export function Header({
       </div>
       <div className="topbar-right">
         <ThemeToggle />
-        <span className="private-badge">
-          <ShieldCheck size={14} />
-          {session.identity.admin ? '个人工作空间' : '临时访问'}
-        </span>
-        <span className="model-pill">
-          <span className="status-dot" />
-          {session.model}
-        </span>
+        <div className="profile">
+          <div className="avatar" aria-hidden="true">
+            {session.identity.admin ? 'O' : 'G'}
+          </div>
+          <div className="profile-identity">
+            <strong>{session.identity.admin ? '我的 Orbit' : '访客空间'}</strong>
+            <small>
+              {session.identity.admin
+                ? '管理员'
+                : `有效至 ${formatDate(session.identity.expires_at)}`}
+            </small>
+          </div>
+          <button
+            className="icon-button"
+            title="退出登录"
+            aria-label="退出登录"
+            onClick={() => void onLogout()}
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </div>
     </header>
   );

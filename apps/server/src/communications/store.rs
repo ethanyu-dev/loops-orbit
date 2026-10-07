@@ -91,6 +91,13 @@ fn read(state: &AppState, document: &Document, hash: &str, extension: &str) -> A
 }
 /// 读取当前 JSONL 快照；每条消息保留各自发送者和时间。
 pub(crate) fn raw(state: &AppState, document: &Document) -> ApiResult<Vec<Message>> {
+    if document.extraction_version != 1 {
+        return Err(unavailable("资料正在重新核对个人关联范围"));
+    }
+    raw_unchecked(state, document)
+}
+/// 仅合并与重处理可以读取尚未核对范围的旧快照，业务读取必须走 raw。
+pub(super) fn raw_unchecked(state: &AppState, document: &Document) -> ApiResult<Vec<Message>> {
     read(state, document, &document.raw_hash, "jsonl")?
         .lines()
         .map(|line| serde_json::from_str(line).map_err(unavailable))
