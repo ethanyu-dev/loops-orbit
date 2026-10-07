@@ -13,7 +13,7 @@ pub(crate) async fn bind(state: &AppState, owner: &str, reference: &Reference) -
         return Err(ApiError(StatusCode::FORBIDDEN, "communication_forbidden"));
     }
     let sql = format!(
-        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE id=$1 AND version=$2 AND source_id IN(SELECT id FROM communication_sources WHERE enabled)"
+        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE extraction_version=1 AND id=$1 AND version=$2 AND source_id IN(SELECT id FROM communication_sources WHERE enabled)"
     );
     let doc: Document = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(reference.document_id)

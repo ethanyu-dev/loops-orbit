@@ -101,7 +101,7 @@ pub(crate) fn validate_stored(summary: &Summary, messages: &[Message]) -> ApiRes
 /// 每次只处理一份待整理日文件，失败退避，重启后继续。
 pub(super) async fn step(state: &AppState) -> ApiResult<bool> {
     let sql = format!(
-        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE summary_hash IS NULL AND next_summary<=now() AND source_id IN(SELECT id FROM communication_sources WHERE enabled) ORDER BY next_summary LIMIT 1"
+        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE extraction_version=1 AND summary_hash IS NULL AND next_summary<=now() AND source_id IN(SELECT id FROM communication_sources WHERE enabled) ORDER BY next_summary LIMIT 1"
     );
     let Some(doc): Option<Document> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_optional(&state.pool)

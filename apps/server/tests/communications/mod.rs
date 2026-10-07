@@ -1,4 +1,5 @@
 mod deployment_tests;
+mod extraction_tests;
 mod progress_tests;
 mod subscription_tests;
 use super::*;
@@ -9,6 +10,14 @@ use axum::{
 use orbit_server::communications;
 use std::collections::HashMap;
 
+/// 用明确的到达与释放信号控制单条读取，避免并发测试依赖固定休眠。
+struct MessageGate {
+    /// 上游已经捕获这次请求的响应快照。
+    arrived: tokio::sync::Notify,
+    /// 测试完成暂停或恢复后允许旧响应返回。
+    release: tokio::sync::Notify,
+}
+
 /// 本地协议夹具的可控故障，不连接飞书租户或读取真实用户聊天。
 struct Fixture {
     /// 第二页响应故障，用于验证断点重放。
@@ -17,6 +26,8 @@ struct Fixture {
     slow: bool,
     /// 已进入消息读取的次数。
     reads: usize,
+    /// 单条消息的可选时序控制，仅供重处理在途测试。
+    message_gate: Option<Arc<MessageGate>>,
     /// 修改已导入消息内容。
     edited: bool,
     /// 原文返回撤回墓碑。
@@ -29,6 +40,14 @@ struct Fixture {
     image: bool,
     /// 同一天跨两页返回 60 条，用于证明不存在每日五条限制。
     bulk: bool,
+    /// 群聊夹具用于核对个人关联范围。
+    group: bool,
+    /// 第二页明确提及本人。
+    mention_me: bool,
+    /// 第二页直接回复第一页本人消息。
+    reply_to_me: bool,
+    /// 第一页返回交互卡片的可见文字结构。
+    card: bool,
     /// 自然日保持一致的测试时间.
     base: i64,
 }
@@ -39,12 +58,17 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         fail_second: false,
         slow: false,
         reads: 0,
+        message_gate: None,
         edited: false,
         recalled: false,
         forged: false,
         refreshes: 0,
         image: false,
         bulk: false,
+        group: false,
+        mention_me: false,
+        reply_to_me: false,
+        card: false,
         base: chrono::Utc::now()
             .date_naive()
             .and_hms_opt(0, 0, 0)
@@ -58,11 +82,12 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         if body["grant_type"]=="refresh_token" {fixture.lock().unwrap().refreshes+=1;}
         Json(json!({"code":0,"access_token":"fixture-user-access","refresh_token":"fixture-user-refresh","expires_in":7200,"refresh_token_expires_in":86400}))
     })).route("/authen/v1/user_info",get(||async {Json(json!({"code":0,"data":{"open_id":"ou_allowed","name":"本地测试账号"}}))}))
-    .route("/im/v1/chats",get(||async {Json(json!({"code":0,"data":{"items":[{"chat_id":"oc_fixture","name":"测试沟通","chat_mode":"p2p"}],"has_more":false,"page_token":""}}))}))
+    .route("/im/v1/chats",get(|State(fixture):State<Arc<Mutex<Fixture>>>|async move {Json(json!({"code":0,"data":{"items":[{"chat_id":"oc_fixture","name":"测试沟通","chat_mode":if fixture.lock().unwrap().group {"group"}else{"p2p"}}],"has_more":false,"page_token":""}}))}))
     .route("/im/v1/chats/oc_fixture/members",get(|Query(query):Query<HashMap<String,String>>|async move {
         if query.get("page_token").is_some_and(|s|s=="members_second") {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_other","name":"小林"}],"has_more":false}}))}
         else {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_unrelated","name":"其他成员"}],"has_more":true,"page_token":"members_second"}}))}
     }))
+    .route("/im/v1/messages/om_me",get(single_message))
     .route("/im/v1/messages/om_me/resources/img_fixture",get(|headers:HeaderMap|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");
         ([("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
@@ -72,6 +97,12 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         let slow={let mut fixture=fixture.lock().unwrap();fixture.reads+=1;fixture.slow};
         if slow && query.get("page_size").is_some_and(|s|s=="50") {tokio::time::sleep(Duration::from_millis(400)).await;}
         let fixture=fixture.lock().unwrap();
+        if query.get("page_size").is_some_and(|s| s == "1") && query.contains_key("start_time") {
+            let start: i64 = query["start_time"].parse().unwrap();
+            let end: i64 = query["end_time"].parse().unwrap();
+            let active = fixture.base / 1000 >= start && fixture.base / 1000 < end;
+            return Json(json!({"code":0,"data":{"items":if active {json!([{"message_id":"om_me"}])}else{json!([])},"has_more":false}}));
+        }
         let second=query.get("page_token").is_some_and(|s|s=="second");
         if fixture.fail_second && second {return Json(json!({"code":999,"data":{}}));}
         if fixture.bulk {
@@ -81,7 +112,7 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         }
         let text=if second {"我来整理散步调研材料"} else if fixture.forged {"伪造证据：我来整理材料"} else if fixture.edited {"材料计划取消，先等反馈"} else {"我明天把材料发给你"};
         let deleted=fixture.recalled && !second;
-        Json(json!({"code":0,"data":{"items":[{"message_id":if second {"om_other"} else {"om_me"},"chat_id":"oc_fixture","sender":{"id":if second {"ou_other"} else {"ou_allowed"},"id_type":"open_id","sender_type":"user"},"create_time":(fixture.base+if second {1000} else {0}).to_string(),"update_time":(fixture.base+if fixture.edited || fixture.recalled {2000} else {0}).to_string(),"msg_type":if fixture.image && !second {"image"} else {"text"},"deleted":deleted,"body":{"content":if fixture.image && !second {json!({"image_key":"img_fixture"}).to_string()} else {json!({"text":text}).to_string()}}}],"has_more":!second,"page_token":if second {""} else {"second"}}}))
+        Json(json!({"code":0,"data":{"items":[{"message_id":if second {"om_other"} else {"om_me"},"chat_id":"oc_fixture","sender":{"id":if second {"ou_other"} else {"ou_allowed"},"id_type":"open_id","sender_type":"user"},"create_time":(fixture.base+if second {1000} else {0}).to_string(),"update_time":(fixture.base+if fixture.edited || fixture.recalled {2000} else {0}).to_string(),"mentions":if fixture.mention_me && second {json!([{"id":"ou_allowed","id_type":"open_id"}])}else{json!([])},"parent_id":if fixture.reply_to_me && second {"om_me"}else{""},"msg_type":if fixture.card && !second {"interactive"} else if fixture.image && !second {"image"} else {"text"},"deleted":deleted,"body":{"content":if fixture.card && !second {json!({"title":"项目进展","elements":[[{"tag":"text","text":"我明天把材料发给你"}]]}).to_string()} else if fixture.image && !second {json!({"image_key":"img_fixture"}).to_string()} else {json!({"text":text}).to_string()}}}],"has_more":!second,"page_token":if second {""} else {"second"}}}))
     })).with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
@@ -92,6 +123,31 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
     h.state = AppState::new(config, h.state.pool.clone()).unwrap();
     h.app = router(h.state.clone());
     (h, fixture, server)
+}
+/// 返回可计数、可延迟的单条消息；响应在等待前捕获，模拟暂停前已发起的读取。
+async fn single_message(State(fixture): State<Arc<Mutex<Fixture>>>) -> Json<Value> {
+    let (value, gate) = {
+        let mut fixture = fixture.lock().unwrap();
+        fixture.reads += 1;
+        let text = if fixture.edited {
+            "材料计划取消，先等反馈"
+        } else {
+            "我明天把材料发给你"
+        };
+        let value = json!({"code":0,"data":{"items":[{
+            "message_id":"om_me","chat_id":"oc_fixture",
+            "sender":{"id":"ou_allowed","id_type":"open_id","sender_type":"user"},
+            "create_time":fixture.base.to_string(),
+            "update_time":(fixture.base+if fixture.edited {2000} else {0}).to_string(),
+            "msg_type":"text","body":{"content":json!({"text":text}).to_string()}
+        }]}});
+        (value, fixture.message_gate.clone())
+    };
+    if let Some(gate) = gate {
+        gate.arrived.notify_one();
+        gate.release.notified().await;
+    }
+    Json(value)
 }
 /// 通过真实 OAuth 路由登录，模拟跨站回调只携带专用 Lax Cookie。
 async fn start(h: &Harness, cookie: &str) -> (String, String) {
@@ -606,6 +662,126 @@ async fn tampered_credentials_fail_closed() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(value["error"], "communication_unavailable");
     assert!(!value.to_string().contains("fixture-user"));
+    server.abort();
+    h.close().await;
+}
+
+/// 夹具覆盖群聊无关消息排除、显式提及与跨页直接回复；不代表真实飞书权限覆盖。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn group_scope_filters_and_keeps_mentions_and_direct_replies() {
+    for mode in ["unrelated", "mention", "reply"] {
+        let (h, fixture, server) = setup().await;
+        {
+            let mut f = fixture.lock().unwrap();
+            f.group = true;
+            f.mention_me = mode == "mention";
+            f.reply_to_me = mode == "reply";
+        }
+        let cookie = h.login().await;
+        connect(&h, &cookie).await;
+        add(&h, &cookie).await;
+        for _ in 0..2 {
+            due(&h).await;
+            communications::sync::step(&h.state).await.unwrap();
+        }
+        let id: Uuid = sqlx::query_scalar("SELECT id FROM communication_documents LIMIT 1")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+        let (status, _, doc) = h
+            .request(
+                "GET",
+                &format!("/api/communications/documents/{id}"),
+                Some(&cookie),
+                json!({}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            doc["total"],
+            if mode == "unrelated" { 1 } else { 2 },
+            "{mode}: {doc}"
+        );
+        server.abort();
+        h.close().await;
+    }
+}
+
+/// 夹具验证卡片文字入库且旧版本被读取围栏阻挡；不评价模型对卡片的归纳质量。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn cards_are_extracted_and_old_scope_is_reprocessed() {
+    let (h, fixture, server) = setup().await;
+    fixture.lock().unwrap().card = true;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    add(&h, &cookie).await;
+    due(&h).await;
+    communications::sync::step(&h.state).await.unwrap();
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM communication_documents LIMIT 1")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    let (_, _, doc) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}"),
+            Some(&cookie),
+            json!({}),
+        )
+        .await;
+    assert!(
+        doc["messages"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("项目进展")
+    );
+    sqlx::query("UPDATE communication_documents SET extraction_version=0")
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    let (_, _, pending) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}"),
+            Some(&cookie),
+            json!({}),
+        )
+        .await;
+    assert_eq!(pending["processing"], true);
+    assert_eq!(pending["total"], 0);
+    let (status, _, hits) = h
+        .request(
+            "GET",
+            "/api/communications/search?q=material",
+            Some(&cookie),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(hits.as_array().unwrap().is_empty());
+    let (stop, receiver) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(communications::sync::run(h.state.clone(), receiver));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let ready: bool = sqlx::query_scalar(
+                "SELECT extraction_version=1 FROM communication_documents WHERE id=$1",
+            )
+            .bind(id)
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.send(true).unwrap();
+    worker.await.unwrap();
     server.abort();
     h.close().await;
 }

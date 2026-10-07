@@ -16,6 +16,26 @@ const MAX_MESSAGE_BYTES: usize = 128 * 1024;
 // 有积压时最多每秒推进五页；空队列保持两秒轮询，避免会话数量乘上固定睡眠。
 const ACTIVE_SYNC_DELAY_MS: u64 = 200;
 
+/// 个人关联规则升级先清理旧摘要依赖与推理上下文，完成后才允许正常服务。
+pub async fn initialize_scope(state: &AppState) -> ApiResult<()> {
+    if state.config.communications.is_none() {
+        return Ok(());
+    }
+    let pending: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM communication_connections WHERE scope_context_pending)",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    if pending {
+        let _guard = state.communications.lock().await;
+        dependencies::cancel(state, None, None).await?;
+        dependencies::invalidate_context(state).await?;
+        sqlx::query("UPDATE communication_connections SET scope_context_pending=false")
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(())
+}
 /// 独立采集 worker 不创建 runs，不发送聊天回复；每次一页给其他来源留出机会。
 pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
     // 独立循环共享关闭信号，慢摘要或 embedding 不阻塞消息同步。
@@ -42,7 +62,7 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
                     0 => step(state).await,
                     1 => super::summary::step(state).await,
                     2 => super::search::index_step(state).await.map(|_| false),
-                    3 => super::subscription::discover(state).await.map(|_| false),
+                    3 => reprocess_step(state).await.map(|_| false),
                     4 => super::subscription::history_step(state)
                         .await
                         .map(|_| false),
@@ -62,6 +82,11 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
         }
         tokio::select! {_=tokio::time::sleep(Duration::from_millis(delay))=>{},_=stop.changed()=>return}
     }
+}
+/// 旧资料升级的单步入口与后台共用，便于验证暂停、版本和启动边界。
+pub async fn reprocess_step(state: &AppState) -> ApiResult<()> {
+    super::configured(state)?;
+    super::extraction::reprocess(state).await
 }
 /// 公共单步入口供真实 worker 和协议夹具共用，不使用伪造聊天队列。
 pub async fn step(state: &AppState) -> ApiResult<bool> {
@@ -135,6 +160,7 @@ pub(super) async fn page(
     if more && (next.is_empty() || next == source.page_token || next.len() > 16384) {
         return Err(unavailable("无效分页状态"));
     }
+    let mode = super::extraction::chat_mode(state, source, &token).await?;
     // 姓名查询不影响原文保存，成员分页直到找到当前页发送者或达到安全边界。
     let names = super::members::names(state, source, &token, items, open_id).await;
     let mut days: BTreeMap<String, Vec<store::Message>> = BTreeMap::new();
@@ -151,6 +177,12 @@ pub(super) async fn page(
         {
             continue;
         }
+        let relevant =
+            super::extraction::related(state, item, &mode, open_id, &token, items, &source.chat_id)
+                .await?;
+        message.payload["related"] = json!(relevant);
+        message.payload["relation"] =
+            json!(super::extraction::relation_label(item, &mode, open_id));
         let day = super::calendar::day(message.create_time)?;
         days.entry(day).or_default().push(message);
     }
@@ -199,11 +231,12 @@ pub(super) async fn commit_day(
         day: day.into(),
         raw_hash: String::new(),
         version: 0,
+        extraction_version: 1,
         summary_hash: None,
         summary_error: None,
     });
     let raw = if previous.is_some() {
-        store::raw(state, &document)?
+        store::raw_unchecked(state, &document)?
     } else {
         vec![]
     };
@@ -214,12 +247,22 @@ pub(super) async fn commit_day(
         .collect();
     let mut corrected = false;
     for mut message in messages {
+        // 历史与增量请求可能乱序返回；删除无关记录也必须先通过版本检查。
+        // 撤回墓碑仍沿用原有优先级，避免供应商缺少更新时间时保留已撤回正文。
+        if let Some(old) = merged.get(&message.message_id)
+            && old.update_time > message.update_time
+            && !message.deleted
+        {
+            continue;
+        }
+        // 新页中已经不相关的消息也要移除旧版本，避免编辑后遗留正文。
+        if message.payload["related"] == false {
+            corrected |= merged.remove(&message.message_id).is_some();
+            continue;
+        }
         if let Some(old) = merged.get(&message.message_id) {
             if message.sender_name.is_empty() {
                 message.sender_name = old.sender_name.clone();
-            }
-            if old.update_time > message.update_time && !message.deleted {
-                continue;
             }
             if old != &message {
                 corrected = true;
@@ -229,17 +272,29 @@ pub(super) async fn commit_day(
     }
     let mut merged: Vec<_> = merged.into_values().collect();
     merged.sort_by(|a, b| (a.create_time, &a.message_id).cmp(&(b.create_time, &b.message_id)));
-    if merged == raw {
+    if (previous.is_none() && merged.is_empty())
+        || (merged == raw && document.extraction_version == 1)
+    {
         return Ok(());
     }
-    // 对旧原文的修正先废止已有回答上下文，不能继续依据撤回的信息推理。
-    if corrected {
+    // 可召回资料被修正时才清理上下文；待升级资料已由启动围栏隔离，不能取消新聊天。
+    if corrected && document.extraction_version == 1 {
         dependencies::invalidate_context(state).await?;
     }
     dependencies::cancel(state, Some(document.id), None).await?;
     document.raw_hash = store::write_raw(state, &document, &merged)?;
     document.version += 1;
     document.summary_hash = None;
+    for removed in raw
+        .iter()
+        .filter(|old| !merged.iter().any(|m| m.message_id == old.message_id))
+    {
+        sqlx::query("DELETE FROM communication_images WHERE source_id=$1 AND message_id=$2")
+            .bind(source.id)
+            .bind(&removed.message_id)
+            .execute(&state.pool)
+            .await?;
+    }
     for message in &merged {
         sqlx::query("DELETE FROM communication_images WHERE source_id=$1 AND message_id=$2 AND (fingerprint<>$3 OR $4)").bind(source.id).bind(&message.message_id).bind(super::images::fingerprint(message)).bind(message.deleted).execute(&state.pool).await?;
     }
@@ -249,8 +304,8 @@ pub(super) async fn commit_day(
     store::collect(state, &document)?;
     Ok(())
 }
-/// 仅解析文本和富文本中的文字，附件保留元数据，不伪称已经阅读图片或语音。
-fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResult<store::Message> {
+/// 提取文本、富文本和卡片可见文字，附件保留元数据，不执行卡片动作。
+pub(super) fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResult<store::Message> {
     if serde_json::to_vec(value).map_err(unavailable)?.len() > MAX_MESSAGE_BYTES {
         return Err(unavailable("消息过大"));
     }
@@ -280,17 +335,20 @@ fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResult<store::Me
     let message_type = value["msg_type"].as_str().unwrap_or("unknown").to_owned();
     let content = value["body"]["content"].as_str().unwrap_or("");
     let mut text = String::new();
-    if !deleted && matches!(message_type.as_str(), "text" | "post") {
+    if !deleted && matches!(message_type.as_str(), "text" | "post" | "interactive") {
         let body: Value = serde_json::from_str(content).map_err(unavailable)?;
         if message_type == "text" {
             text = body["text"]
                 .as_str()
                 .ok_or_else(|| unavailable("无效文字消息"))?
                 .into();
+        } else if message_type == "interactive" {
+            text = super::extraction::card_text(&body);
         } else {
             post_text(&body, &mut text);
         }
     }
+    text = super::mentions::resolve(&text, &value["mentions"], open_id);
     Ok(store::Message {
         message_id,
         chat_id: chat_id.into(),
@@ -307,7 +365,7 @@ fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResult<store::Me
         payload: if deleted {
             Value::Null
         } else {
-            json!({"body":value["body"],"root_id":value["root_id"],"parent_id":value["parent_id"],"thread_id":value["thread_id"]})
+            json!({"mentions":value["mentions"],"body":value["body"],"root_id":value["root_id"],"parent_id":value["parent_id"],"thread_id":value["thread_id"]})
         },
     })
 }

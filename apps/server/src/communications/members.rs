@@ -30,6 +30,18 @@ pub(super) async fn names(
         .map(str::to_owned)
         .collect();
     let mut names = BTreeMap::new();
+    // 消息携带的提及映射也是同一 open_id 的可信展示名，可补足已离群成员的名称。
+    for item in items {
+        for mention in item["mentions"].as_array().into_iter().flatten() {
+            if mention["id_type"] == "open_id"
+                && let (Some(id), Some(name)) = (mention["id"].as_str(), mention["name"].as_str())
+                && !name.trim().is_empty()
+                && missing.remove(id)
+            {
+                names.insert(id.to_owned(), name.chars().take(120).collect());
+            }
+        }
+    }
     let mut cursor = String::new();
     let mut seen = BTreeSet::new();
     for _ in 0..MAX_MEMBER_PAGES {

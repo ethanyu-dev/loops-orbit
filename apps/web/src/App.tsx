@@ -140,10 +140,14 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
           setSidebar(false);
           setError('');
         }}
-        onLogout={logout}
       />
       <main className="main-panel">
-        <Header page={page} session={session} onOpenSidebar={() => setSidebar(true)} />
+        <Header
+          page={page}
+          session={session}
+          onLogout={logout}
+          onOpenSidebar={() => setSidebar(true)}
+        />
         {error && (
           <div className="global-error" role="alert">
             {error}
@@ -195,7 +199,7 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
               />
               <Route path="/memory" element={<Memory report={report} />} />
               <Route
-                path="/communications"
+                path="/communications/*"
                 element={
                   session.identity.admin ? (
                     <Communications report={report} />

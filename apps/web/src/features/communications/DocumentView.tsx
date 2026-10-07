@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { ArrowLeft, Bell, RefreshCw } from 'lucide-react';
+import { API_ORIGIN } from '../../config';
 import { api, errorText } from '../../api';
 import type { Detail, Item } from './types';
 
@@ -20,7 +22,6 @@ export function DocumentView({
   report: (e: unknown) => void;
   onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [loadError, setLoadError] = useState('');
   const [revision, setRevision] = useState(0);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -32,19 +33,7 @@ export function DocumentView({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [key, setKey] = useState(() => crypto.randomUUID());
-  // 卸载前恢复触发按钮，避免关闭弹窗后丢失长列表中的键盘位置。
-  useLayoutEffect(() => {
-    const element = dialog.current;
-    const previous = document.activeElement;
-    element?.showModal();
-    return () => {
-      element?.close();
-      if (previous instanceof HTMLElement && previous.isConnected) {
-        previous.focus({ preventScroll: true });
-      }
-    };
-  }, []);
-  // 切页或关闭时取消旧请求，避免慢响应覆盖新页；错误留在弹窗内供重试。
+  // 切页时取消旧请求，错误留在详情页内供重试。
   useEffect(() => {
     const controller = new AbortController();
     setDetail(null);
@@ -93,23 +82,25 @@ export function DocumentView({
     }
   }
   return (
-    <dialog
-      ref={dialog}
-      className="communication-dialog"
-      aria-labelledby="communication-document-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-    >
+    <div className="settings-page communication-detail-page">
       <section className="communication-card">
-        <div className="communication-row communication-dialog-heading">
-          <h2 id="communication-document-title">
-            沟通整理{detail ? ` · ${detail.document.day}` : '与原文'}
-          </h2>
-          <button onClick={onClose}>关闭资料</button>
-        </div>
-        <p>机器归纳需结合原话核对。长期信息候选不会自动写入个人记忆。</p>
+        <button className="detail-back" onClick={onClose}>
+          <ArrowLeft size={16} />
+          沟通记录
+        </button>
+        <header className="document-heading">
+          <div>
+            <h1>{detail?.source_label || '沟通资料'}</h1>
+            <p className="document-meta">
+              {detail?.document.day || '正在读取'}
+              {detail && !detail.processing ? ` · ${detail.total} 条相关消息` : ''}
+            </p>
+          </div>
+          <button className="document-refresh" onClick={() => setRevision((value) => value + 1)}>
+            <RefreshCw size={15} />
+            刷新
+          </button>
+        </header>
         {notice && <p role="status">{notice}</p>}
         {loadError ? (
           <div role="alert">
@@ -118,35 +109,52 @@ export function DocumentView({
           </div>
         ) : !detail ? (
           <p role="status">正在读取整理与原文…</p>
+        ) : detail.processing ? (
+          <p role="status">
+            正在按“与你相关”的规则重新核对旧资料，完成后可查看。
+            <button onClick={() => setRevision((value) => value + 1)}>刷新状态</button>
+          </p>
         ) : (
           <>
-            {!detail.summary && (
-              <p>
-                等待整理；原始记录已经保存。
-                <button onClick={() => setRevision((value) => value + 1)}>刷新</button>
-              </p>
-            )}
-            {detail.summary && (
-              <p>
-                共 {detail.summary.message_count} 条记录；{detail.summary.unsupported_count}{' '}
-                条消息未参与文字摘要；图片解读在对应原始记录下单独展示。
-              </p>
-            )}
-            {detail.summary?.items.length === 0 && <p>这部分资料没有提取到明确事项。</p>}
-            {detail.summary?.items.map((value, index) => (
-              <article className="communication-evidence" key={`${value.message_id}-${index}`}>
-                <span className="tag">{LABELS[value.kind] || value.kind}</span>
-                <p>{value.text}</p>
-                <blockquote>{value.quote}</blockquote>
-                <small>
-                  {value.sender_name || (value.is_me ? '我' : '会话成员')} ·{' '}
-                  {new Date(value.create_time).toLocaleString()}
-                </small>
-                <button onClick={() => select(value, index)}>据此安排提醒</button>
-              </article>
-            ))}
+            <section className="document-section" aria-labelledby="document-summary-title">
+              <div className="document-section-heading">
+                <h2 id="document-summary-title">整理结果</h2>
+                <span>AI 归纳 · 请核对原话</span>
+              </div>
+              {!detail.summary && (
+                <p className="document-empty">正在整理消息，原始内容可在下方查看。</p>
+              )}
+              {detail.summary?.items.length === 0 && (
+                <p className="document-empty">暂未发现明确的决定、承诺或待确认事项。</p>
+              )}
+              {detail.summary?.items.map((value, index) => (
+                <article className="summary-item" key={`${value.message_id}-${index}`}>
+                  <span className="summary-kind">{LABELS[value.kind] || value.kind}</span>
+                  <p className="summary-text">{value.text}</p>
+                  <details className="summary-evidence">
+                    <summary>查看引用原话</summary>
+                    <blockquote>{value.quote}</blockquote>
+                  </details>
+                  <div className="summary-footer">
+                    <span>
+                      {value.sender_name || (value.is_me ? '我' : '成员（姓名未获取）')} ·{' '}
+                      {new Date(value.create_time).toLocaleTimeString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                      })}
+                    </span>
+                    <button onClick={() => select(value, index)}>
+                      <Bell size={14} />
+                      设为提醒
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </section>
             {item !== null && (
-              <form onSubmit={(event) => void create(event)}>
+              <form className="document-reminder-form" onSubmit={(event) => void create(event)}>
                 <h3>确认跟进事项</h3>
                 <label>
                   要提醒我的事
@@ -193,54 +201,90 @@ export function DocumentView({
                 </button>
               </form>
             )}
-            <h3>原始记录</h3>
-            {detail.messages.map((message) => (
-              <article key={message.message_id} className="communication-evidence">
-                <small>
-                  {message.sender_name || (message.is_me ? '我' : '会话成员')} ·{' '}
-                  {new Date(message.create_time).toLocaleString()}
-                </small>
-                <p>
-                  {message.deleted
-                    ? '消息已撤回'
-                    : message.text ||
-                      (message.images?.length
-                        ? '［图片消息］'
-                        : `［${message.message_type}：暂未解析］`)}
+            <section className="document-section" aria-labelledby="document-messages-title">
+              <div className="document-section-heading">
+                <h2 id="document-messages-title">原始消息</h2>
+                <span>{detail.total} 条 · 北京时间</span>
+              </div>
+              {detail.summary && detail.summary.unsupported_count > 0 && (
+                <p className="document-note">
+                  {detail.summary.unsupported_count} 条消息未参与文字摘要，图片解读单独展示。
                 </p>
-                {message.images?.map((image, index) => (
-                  <div className="communication-image" key={image.url}>
-                    <a href={image.url} target="_blank" rel="noreferrer">
-                      查看原图 {message.images.length > 1 ? index + 1 : ''}
-                    </a>
-                    <p>
-                      {image.description
-                        ? `图片机器解读：${image.description}`
-                        : image.reference_only
-                          ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
-                          : image.error
-                            ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
-                            : '图片待解读，原图入口已保存。'}
-                    </p>
+              )}
+              {detail.total === 0 && <p>这一天没有符合个人关联规则的消息。</p>}
+              {detail.messages.map((message) => (
+                <article key={message.message_id} className="document-message">
+                  <div className="document-message-meta">
+                    <strong>
+                      {message.sender_name || (message.is_me ? '我' : '成员（姓名未获取）')}
+                    </strong>
+                    {message.relation && (
+                      <span className="message-relation">{message.relation}</span>
+                    )}
+                    <time>
+                      {new Date(message.create_time).toLocaleTimeString('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                      })}
+                    </time>
                   </div>
-                ))}
-              </article>
-            ))}
-            <div className="communication-row">
-              <button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>
-                上一页
-              </button>
-              <span>
-                {detail.total ? offset + 1 : 0}–{Math.min(offset + 50, detail.total)} /{' '}
-                {detail.total}
-              </span>
-              <button disabled={offset + 50 >= detail.total} onClick={() => setOffset(offset + 50)}>
-                下一页
-              </button>
-            </div>
+                  <p className="document-message-text">
+                    {message.deleted
+                      ? '消息已撤回'
+                      : message.text ||
+                        (message.images?.length
+                          ? '［图片消息］'
+                          : message.message_type === 'interactive'
+                            ? '［交互卡片：未包含可提取的文字］'
+                            : `［${message.message_type}：暂不支持内容解析］`)}
+                  </p>
+                  {message.images?.map((image, index) => (
+                    <div className="communication-image" key={image.url}>
+                      <a href={`${API_ORIGIN}${image.url}`} target="_blank" rel="noreferrer">
+                        查看原图 {message.images.length > 1 ? index + 1 : ''}
+                      </a>
+                      <p>
+                        {image.description
+                          ? `图片机器解读：${image.description}`
+                          : image.reference_only
+                            ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
+                            : image.error
+                              ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
+                              : '图片待解读，原图入口已保存。'}
+                      </p>
+                    </div>
+                  ))}
+                </article>
+              ))}
+              {detail.total > 50 && (
+                <div className="communication-row document-pagination">
+                  <button
+                    disabled={offset === 0}
+                    onClick={() => setOffset(Math.max(0, offset - 50))}
+                  >
+                    上一页
+                  </button>
+                  <span>
+                    {detail.total ? offset + 1 : 0}–{Math.min(offset + 50, detail.total)} /{' '}
+                    {detail.total}
+                  </span>
+                  <button
+                    disabled={offset + 50 >= detail.total}
+                    onClick={() => setOffset(offset + 50)}
+                  >
+                    下一页
+                  </button>
+                </div>
+              )}
+            </section>
+            <p className="document-footnote">
+              仅整理与你相关的消息；机器归纳不会自动写入个人记忆或创建提醒。
+            </p>
           </>
         )}
       </section>
-    </dialog>
+    </div>
   );
 }

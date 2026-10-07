@@ -1,18 +1,8 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import {
-  Bell,
-  Brain,
-  Activity,
-  Link2,
-  LogOut,
-  MessageSquare,
-  Search,
-  SquarePen,
-} from 'lucide-react';
+import { Bell, Brain, Activity, Link2, MessageSquare, Search, SquarePen } from 'lucide-react';
 import type { Conversation, Session } from '../types';
 import { OrbitMark } from '../components/OrbitMark';
-import { formatDate } from '../lib/format';
 import { conversationPath, PAGE_PATHS, type Page } from './navigation';
 
 /** 侧栏只维护搜索展开与关键词，身份、导航和会话选择由应用统一管理。 */
@@ -35,8 +25,6 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
   /** 选择历史会话并清除旧错误。 */
   onSelect: (id: string) => void;
-  /** 退出由服务端 Cookie 维护的会话。 */
-  onLogout: () => Promise<void>;
 }
 
 /** 工作空间导航与会话索引，不直接请求接口。 */
@@ -50,7 +38,6 @@ export function Sidebar({
   onNewChat,
   onNavigate,
   onSelect,
-  onLogout,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -161,31 +148,6 @@ export function Sidebar({
             </NavLink>
           ))}
         {!conversations.length && <p className="history-empty">新的想法，从这里开始。</p>}
-      </div>
-      <div className="sidebar-bottom">
-        <div className="workspace-tag">
-          <span className="status-dot" />
-          个人工作空间<span>V 0.1</span>
-        </div>
-        <div className="profile">
-          <div className="avatar">{session.identity.admin ? 'O' : 'G'}</div>
-          <div>
-            <strong>{session.identity.admin ? '我的 Orbit' : '访客空间'}</strong>
-            <small>
-              {session.identity.admin
-                ? '管理员'
-                : `有效至 ${formatDate(session.identity.expires_at)}`}
-            </small>
-          </div>
-          <button
-            className="icon-button"
-            title="退出登录"
-            aria-label="退出登录"
-            onClick={() => void onLogout()}
-          >
-            <LogOut size={16} />
-          </button>
-        </div>
       </div>
     </aside>
   );

@@ -2,9 +2,11 @@ mod calendar;
 mod client;
 mod crypto;
 pub(crate) mod dependencies;
+mod extraction;
 mod history;
 mod images;
 mod members;
+mod mentions;
 mod oauth;
 pub mod progress;
 pub mod routes;
@@ -103,13 +105,15 @@ pub struct Document {
     pub raw_hash: String,
     /// 原文变更递增。
     pub version: i64,
+    /// 个人关联规则的版本；旧资料必须先重处理。
+    pub extraction_version: i64,
     /// 已验证摘要文件指纹；为空时不召回旧摘要。
     pub summary_hash: Option<String>,
     /// 摘要失败分类。
     pub summary_error: Option<String>,
 }
 pub(super) const DOCUMENT_COLUMNS: &str =
-    "id,source_id,day,raw_hash,version,summary_hash,summary_error";
+    "id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version";
 
 /// 提醒引用的是用户确认的摘要条目，不把整段外部对话当作用户指令。
 #[derive(Clone, Serialize, Deserialize)]

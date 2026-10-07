@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Bell, Plus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { ArrowDown, Bell, Plus, RefreshCw } from 'lucide-react';
 import { api } from '../../api';
 import { Spinner } from '../../components/Feedback';
 import { PreferencesForm } from './PreferencesForm';
@@ -54,12 +54,42 @@ export function Followups({
   const [key, setKey] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshStatus, setRefreshStatus] = useState('');
+  const refreshInFlight = useRef(false);
+  const notificationsPanel = useRef<HTMLElement>(null);
   const load = useCallback(async () => {
     setData(await api<Snapshot>('/followups'));
   }, []);
   useEffect(() => {
     void load().catch(report);
   }, [load, report]);
+  /** 等两个请求均结束后恢复入口；刷新失败不误报成功，也不清空编辑中的草稿。 */
+  async function refresh() {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
+    setRefreshing(true);
+    setRefreshStatus('');
+    try {
+      const results = await Promise.allSettled([load(), refreshNotifications()]);
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') {
+        setRefreshStatus('刷新未完成，请重试');
+        report(failure.reason);
+      } else {
+        setRefreshStatus('已更新');
+      }
+    } finally {
+      refreshInFlight.current = false;
+      setRefreshing(false);
+    }
+  }
+  /** 查看通知只移动阅读位置，实际打开某条通知后才标记已读。 */
+  function showNotifications() {
+    const panel = notificationsPanel.current;
+    panel?.focus({ preventScroll: true });
+    panel?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  }
   /** 一次创建在网络重试时保持相同幂等键；改期使用编辑开始时看到的版本。 */
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -137,15 +167,29 @@ export function Followups({
       <p className="page-description">
         明确的提醒按时送达。允许主动回访后，Orbit 会在合适的时候接着聊一件未完的事。
       </p>
-      <div className="memory-status">
-        <span className="tag">{notifications.unread} 条未读</span>
-        <button
-          className="secondary-button"
-          disabled={busy}
-          onClick={() => void Promise.all([load(), refreshNotifications()]).catch(report)}
-        >
-          刷新
+      <div className="followup-toolbar">
+        <button className="notification-shortcut" onClick={showNotifications}>
+          <Bell size={16} />
+          <span>
+            {notifications.unread ? `${notifications.unread} 条未读通知` : '暂无未读通知'}
+          </span>
+          <span className="notification-shortcut-hint">查看通知</span>
+          <ArrowDown size={14} />
         </button>
+        <div className="followup-refresh">
+          <span className="refresh-status" role="status">
+            {refreshStatus}
+          </span>
+          <button
+            className="refresh-button"
+            disabled={busy || refreshing}
+            onClick={() => void refresh()}
+            aria-label="刷新提醒与通知"
+          >
+            {refreshing ? <Spinner /> : <RefreshCw size={15} />}
+            <span>{refreshing ? '刷新中…' : '刷新'}</span>
+          </button>
+        </div>
       </div>
       {notice && (
         <p className="memory-notice" role="status">
@@ -285,9 +329,14 @@ export function Followups({
           </article>
         ))}
       </section>
-      <section className="settings-card followup-section">
+      <section
+        ref={notificationsPanel}
+        tabIndex={-1}
+        aria-labelledby="recent-notifications-title"
+        className="settings-card followup-section notifications-panel"
+      >
         <div className="card-title">
-          <h2>最近通知</h2>
+          <h2 id="recent-notifications-title">最近通知</h2>
         </div>
         {!notifications.items.length && (
           <p className="field-note">
