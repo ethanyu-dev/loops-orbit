@@ -1,0 +1,25 @@
+query OrbitLinearIssue($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    title
+    description
+    url
+    updatedAt
+    priority
+    state {
+      id
+      name
+      type
+    }
+    assignee {
+      id
+      name
+    }
+    team {
+      id
+      name
+      key
+    }
+  }
+}

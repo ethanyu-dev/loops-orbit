@@ -1,0 +1,168 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "linear_issue_list",
+      "description": "查询 Linear issues，默认分配给绑定账号本人。按团队、状态和标题筛选并分页。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "上次返回的 next_cursor"
+          },
+          "assignee": {
+            "type": "string",
+            "description": "me（默认）、all 或用户 UUID"
+          },
+          "team_id": {
+            "type": "string",
+            "description": "团队 UUID"
+          },
+          "state_id": {
+            "type": "string",
+            "description": "状态 UUID"
+          },
+          "query": {
+            "type": "string",
+            "description": "标题包含的字面文本，最多200字"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "linear_issue_get",
+      "description": "读取 Linear issue 详情和当前更新时间；描述支持连续分页。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "string",
+            "description": "UUID 或 ENG-123 等编号"
+          },
+          "description_offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "description": "续读时必须传之前的 updatedAt"
+          }
+        },
+        "required": [
+          "issue"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "linear_team_metadata",
+      "description": "分页查询 Linear 团队、状态或成员，获取更新字段所需的真实 ID。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "cursor": {
+            "type": "string",
+            "description": "上次返回的 next_cursor"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "teams",
+              "states",
+              "members"
+            ]
+          },
+          "team_id": {
+            "type": "string",
+            "description": "状态和成员查询必填团队 UUID"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "linear_issue_update",
+      "description": "按用户明确指令更新已有 Linear issue 的指定字段。必须先读取详情；unknown 结果不能自动重试。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "string",
+            "description": "UUID 或 ENG-123 等编号"
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "description": "详情返回的 updatedAt"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "本批次用户明确修改指令的逐字片段"
+          },
+          "patch": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "新标题"
+              },
+              "description": {
+                "type": "string",
+                "description": "完整的新描述，不是增量片段"
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4
+              },
+              "state_id": {
+                "type": "string",
+                "description": "目标团队状态 UUID"
+              },
+              "assignee_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "用户 UUID、me；null 取消负责人"
+              }
+            },
+            "additionalProperties": false,
+            "minProperties": 1
+          }
+        },
+        "required": [
+          "issue",
+          "expected_updated_at",
+          "evidence",
+          "patch"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+]

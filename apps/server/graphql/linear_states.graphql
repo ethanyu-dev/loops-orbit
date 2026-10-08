@@ -1,0 +1,15 @@
+query OrbitLinearStates($id: String!, $first: Int!, $after: String) {
+  team(id: $id) {
+    states(first: $first, after: $after) {
+      nodes {
+        id
+        name
+        type
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}

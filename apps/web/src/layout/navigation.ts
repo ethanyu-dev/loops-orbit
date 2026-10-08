@@ -1,5 +1,6 @@
 /** 应用内功能页标识，由应用和布局组件共享。 */
-export type Page = 'chat' | 'links' | 'status' | 'memory' | 'followups' | 'communications';
+export type Page =
+  'chat' | 'links' | 'status' | 'memory' | 'followups' | 'communications' | 'integrations';
 
 // 路由只承载导航；会话归属与管理员权限始终由 API 检查。
 export const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -8,6 +9,7 @@ export const PAGE_PATHS: Record<Page, string> = {
   memory: '/memory',
   followups: '/followups',
   communications: '/communications',
+  integrations: '/integrations',
   links: '/links',
   status: '/status',
 };

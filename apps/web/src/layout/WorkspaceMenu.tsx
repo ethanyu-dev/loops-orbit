@@ -21,6 +21,7 @@ const WORKSPACE_ITEMS = [
   { page: 'memory', label: '个人记忆', icon: Brain, admin: false },
   { page: 'followups', label: '提醒与跟进', icon: Bell, admin: false },
   { page: 'communications', label: '飞书沟通资料', icon: MessageSquare, admin: true },
+  { page: 'integrations', label: '外部连接', icon: Link2, admin: true },
   { page: 'links', label: '访问链接', icon: Link2, admin: true },
   { page: 'status', label: '运行状态', icon: Activity, admin: true },
 ] satisfies { page: Page; label: string; icon: typeof Brain; admin: boolean }[];

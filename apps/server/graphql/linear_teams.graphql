@@ -1,0 +1,13 @@
+query OrbitLinearTeams($first: Int!, $after: String) {
+  teams(first: $first, after: $after) {
+    nodes {
+      id
+      name
+      key
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}

@@ -26,6 +26,16 @@ impl<'a> Host<'a> {
                 owner: followups.owner.clone(),
             }));
         }
+        if let Some(linear) = crate::linear::tools::Provider::new(
+            state,
+            job,
+            &followups.owner,
+            followups.inputs.clone(),
+        )
+        .await?
+        {
+            providers.push(std::sync::Arc::new(linear));
+        }
         Ok(Self {
             followups,
             registry: agent_runtime::tools::Registry::new(providers),

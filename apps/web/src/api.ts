@@ -2,6 +2,12 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
+  linear_disabled: '服务端尚未配置 Linear 应用。',
+  linear_oauth_invalid: '授权回调已失效，请在当前浏览器重新连接。',
+  linear_reauthorize: 'Linear 授权已失效，请重新连接。',
+  linear_rate_limited: 'Linear 请求较频繁，请稍后再试。',
+  linear_unavailable: 'Linear 暂时不可用，请稍后重试。',
+
   invalid_communication_library: '请检查目录日期或搜索词，关键词最多 2,000 字。',
   communication_disabled: '服务端尚未启用飞书沟通采集。',
   communication_not_connected: '请先连接你的飞书账号。',

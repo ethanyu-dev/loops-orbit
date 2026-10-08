@@ -1,6 +1,7 @@
 mod communications;
 mod conversation_flow;
 mod followups;
+mod linear;
 mod memory;
 
 use axum::{
@@ -198,6 +199,7 @@ impl Harness {
             axum::serve(listener, upstream).await.unwrap();
         });
         let config = Config {
+            linear: None,
             communications: None,
             memory: None,
             followup_timezone: "Asia/Shanghai".into(),
