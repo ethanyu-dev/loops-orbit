@@ -1,0 +1,30 @@
+[
+  {
+    "name": "linear_issue_list",
+    "provider": "linear",
+    "description": "查询 Linear issues，默认分配给绑定账号本人。按团队、状态和标题筛选并分页。",
+    "effect": "read",
+    "keywords": "Linear issue pplabs 工单 任务 分配给我 查询 更新 修改 状态 优先级 负责人 assigned issues"
+  },
+  {
+    "name": "linear_issue_get",
+    "provider": "linear",
+    "description": "读取 Linear issue 详情和当前更新时间；描述支持连续分页。",
+    "effect": "read",
+    "keywords": "Linear issue pplabs 工单 任务 分配给我 查询 更新 修改 状态 优先级 负责人 assigned issues"
+  },
+  {
+    "name": "linear_team_metadata",
+    "provider": "linear",
+    "description": "分页查询 Linear 团队、状态或成员，获取更新字段所需的真实 ID。",
+    "effect": "read",
+    "keywords": "Linear issue pplabs 工单 任务 分配给我 查询 更新 修改 状态 优先级 负责人 assigned issues"
+  },
+  {
+    "name": "linear_issue_update",
+    "provider": "linear",
+    "description": "按用户明确指令更新已有 Linear issue 的指定字段。必须先读取详情；unknown 结果不能自动重试。",
+    "effect": "write",
+    "keywords": "Linear issue pplabs 工单 任务 分配给我 查询 更新 修改 状态 优先级 负责人 assigned issues"
+  }
+]

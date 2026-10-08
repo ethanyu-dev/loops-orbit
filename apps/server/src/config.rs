@@ -26,6 +26,8 @@ pub struct Config {
     pub followup_timezone: String,
     /// 用户授权的沟通资料采集，与机器人消息入口独立启用。
     pub communications: Option<crate::communications::Config>,
+    /// 独立的 Linear 用户 OAuth 连接。
+    pub linear: Option<crate::linear::Config>,
 }
 
 /// 飞书自建应用配置，白名单限制个人服务的访问者。
@@ -101,6 +103,7 @@ impl Config {
             "沟通采集需要飞书配置及本地记忆存储"
         );
         Ok(Self {
+            linear: crate::linear::Config::from_env()?,
             communications,
             followup_timezone,
             database_url: required("DATABASE_URL")?,

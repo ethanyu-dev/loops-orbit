@@ -299,6 +299,36 @@ docker run --rm -p 5173:8080 -e API_ORIGIN=http://localhost:8080 orbit-web:local
 
 建议对就绪失败、队列持续增长、失败任务增长和飞书发送失败设置外部告警。失败任务和完整对话可在控制台定位；首版不自动删除对话，数据保留与容量需由部署者管理。
 
+## Linear 连接与 issue 工具
+
+管理员从工作空间菜单打开「外部连接」，通过 Linear OAuth 绑定自己的账号。部署前在 Linear 创建 OAuth 应用，回调地址填写 `API_PUBLIC_URL/api/linear/oauth/callback`，例如本地 `http://localhost:8080/api/linear/oauth/callback`。服务端配置：
+
+```dotenv
+LINEAR_CLIENT_ID=你的应用ID
+LINEAR_CLIENT_SECRET=你的应用密钥
+LINEAR_TOKEN_KEY=独立生成的64位十六进制密钥
+LINEAR_WORKSPACE_SLUG=pplabs
+```
+
+`LINEAR_TOKEN_KEY` 可使用 `openssl rand -hex 32` 生成，必须与数据库一起妥善保管；直接替换会使已有连接无法解密，需要重新授权。`LINEAR_WORKSPACE_SLUG` 可留空；配置为 `pplabs` 时拒绝连接其他工作空间。不设置 `LINEAR_CLIENT_ID` 则禁用整个能力。数据库迁移 `0015_linear.sql` 随 API 启动执行。前后端生产地址继续遵守前述同站点部署要求。
+
+默认申请 read；勾选「允许按我的明确指令更新 issues」才申请 write，最终以供应商实际授予的 scopes 为准。连接绑定实际 Linear 用户和工作空间，只对网页管理员开放，访客、飞书聊天和后台任务不继承此授权。切换账号或工作空间前需断开旧连接。OAuth state 同时绑定浏览器、原管理员会话和 PKCE，凭证以 AES-GCM 加密保存；刷新通过数据库行锁串行处理。断开禁用后续工具调用并尝试向供应商撤销令牌，不删除历史回答，也不能撤回已派发的修改。
+
+连接后可直接问「分配给我的 issues 有哪些」，或明确要求「把 ENG-123 的优先级改为高」。四个工具通过渐进式目录发现、加载，不会在每轮默认发送全部定义：
+
+| 工具 | 能力与边界 |
+| --- | --- |
+| `linear_issue_list` | 默认分配给绑定账号本人；团队、状态和标题字面筛选，最多 50 条一页，返回 `has_more` 和游标。 |
+| `linear_issue_get` | 读取详情和更新时间，长描述每次最多 6000 字符，续读需要相同版本。 |
+| `linear_team_metadata` | 分页查询团队、状态或成员，获取修改需要的真实 ID。 |
+| `linear_issue_update` | 修改标题、完整描述、优先级、状态或负责人；省略字段保持原样，负责人 null 表示清空。 |
+
+本人列表对应授权账号的 assignee 条件，不复刻 Linear 网页保存的筛选和排序偏好。首版不支持创建、删除、评论或任意 GraphQL。提示词要求明确用户指令，服务端校验真实输入片段、当前任务租约、连接代次、权限和字段白名单；片段校验不能独立证明自然语言授权语义。更新前对比 `updatedAt` 仅为尽力冲突检测，不能保证外部原子条件更新。
+
+每次更新派发前保存操作记录，同一任务、连接代次、issue 和补丁不会重复发送。平台响应丢失或进程中断时返回 `unknown`，不自动重试写入；只有验证成功响应才返回 `confirmed`。再次读取可以确认当前状态，但不能证明此前请求是否执行成功。网络调用有超时及响应体上限，HTTP 200 的 GraphQL errors 同样按失败处理，HTTP 400 的 `RATELIMITED` 按限流处理。
+
+协议依据 Linear 官方 [OAuth 文档](https://linear.app/developers/oauth-2-0-authentication)、[GraphQL 文档](https://linear.app/developers/graphql)和[限流说明](https://linear.app/developers/rate-limiting)。集成测试使用真实 PostgreSQL 与本地 OAuth/GraphQL 夹具，覆盖浏览器绑定、回调重放、刷新串行化与失效、凭证篡改、分页、更新去重、未知结果和断开期间的响应围栏；不代表真实 Linear 账号、授权页或模型语义验收。
+
 ## 认证与临时链接
 
 管理员 token 只用于兑换随机会话；浏览器通过 API 主机专属的 `HttpOnly; SameSite=Strict` Cookie 访问 API，HTTPS 环境附带 `Secure`；Cookie 不设置父域 `Domain`。前端请求显式使用 `credentials: include`，后端仅对 `PUBLIC_URL` 返回带凭据的 CORS 响应。管理员会话最长七天，根 token 轮换后旧管理员会话立即失效。

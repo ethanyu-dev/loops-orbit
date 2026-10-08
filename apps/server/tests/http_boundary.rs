@@ -14,6 +14,7 @@ const FRONTEND: &str = "https://orbit.ethankit.com";
 /// 构造生产路由但不启动 worker，不依赖网络、真实凭据或生产数据。
 fn app() -> Router {
     let config = Config {
+        linear: None,
         database_url: "postgres://unused:unused@localhost/unused".into(),
         admin_token: "http-boundary-test-token-at-least-32-bytes".into(),
         public_url: FRONTEND.into(),

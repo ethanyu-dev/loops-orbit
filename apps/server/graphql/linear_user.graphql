@@ -1,0 +1,9 @@
+query OrbitLinearUser($id: String!) {
+  user(id: $id) {
+    id
+    active
+    organization {
+      id
+    }
+  }
+}

@@ -1,0 +1,15 @@
+query OrbitLinearMembers($id: String!, $first: Int!, $after: String) {
+  team(id: $id) {
+    members(first: $first, after: $after) {
+      nodes {
+        id
+        name
+        active
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+}

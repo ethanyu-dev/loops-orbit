@@ -13,6 +13,9 @@ import { useNotifications } from './features/followups/useNotifications';
 
 // 功能页按路由加载，首屏登录和聊天无需下载整个管理界面。
 const Chat = lazy(() => import('./features/chat/Chat').then((m) => ({ default: m.Chat })));
+const Integrations = lazy(() =>
+  import('./features/integrations/Integrations').then((m) => ({ default: m.Integrations })),
+);
 const Links = lazy(() => import('./features/links/Links').then((m) => ({ default: m.Links })));
 const Memory = lazy(() => import('./features/memory/Memory').then((m) => ({ default: m.Memory })));
 const Followups = lazy(() =>
@@ -207,6 +210,16 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
                       void loadConversations().catch(report);
                     }}
                   />
+                }
+              />
+              <Route
+                path="/integrations"
+                element={
+                  session.identity.admin ? (
+                    <Integrations report={report} />
+                  ) : (
+                    <Unavailable forbidden />
+                  )
                 }
               />
               <Route path="/memory" element={<Memory report={report} />} />

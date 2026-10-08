@@ -6,6 +6,7 @@ pub mod context;
 pub mod error;
 pub mod feishu;
 pub mod followups;
+pub mod linear;
 pub mod memory;
 pub mod tools;
 pub mod worker;
@@ -99,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/me", get(auth::me))
         .nest("/api/communications", communications::routes::router())
+        .nest("/api/linear", linear::routes::router())
         .route(
             "/api/followups",
             get(followups::routes::index).post(followups::routes::create),
