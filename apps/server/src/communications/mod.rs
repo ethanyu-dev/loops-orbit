@@ -18,6 +18,7 @@ pub(crate) mod store;
 pub mod subscription;
 pub(crate) mod summary;
 pub mod sync;
+pub(crate) mod tools;
 /// 与聊天共用的身份隔离检索入口。
 pub use search::search as retrieve;
 

@@ -7,6 +7,7 @@ pub mod error;
 pub mod feishu;
 pub mod followups;
 pub mod memory;
+pub mod tools;
 pub mod worker;
 
 use crate::{

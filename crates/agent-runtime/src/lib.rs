@@ -1,4 +1,5 @@
 mod stream;
+mod time;
 pub mod tools;
 
 use chrono::Utc;
@@ -7,7 +8,8 @@ use serde_json::{Value, json};
 use std::{fmt, time::Duration};
 
 // 限制工具往返和上游响应大小，防止异常模型无限执行或占满内存。
-const MAX_STEPS: usize = 5;
+// 日期汇总可多次分页和读取；最后一轮保留给基于实际覆盖范围的回答。
+const MAX_STEPS: usize = 12;
 const MAX_TOOL_CALLS: usize = 8;
 // 摘要输出独立限长，防止压缩后反而挤占近期对话。
 const MAX_SUMMARY_CHARS: usize = 6000;
@@ -115,11 +117,17 @@ impl Runtime {
             if let Some(progress) = progress {
                 progress.send_replace(String::new());
             }
+            let tools_available = self.config.tools_enabled && step + 1 < MAX_STEPS;
+            if self.config.tools_enabled && !tools_available {
+                messages.push(
+                    json!({"role":"system","content":include_str!("../prompts/tool_budget.md")}),
+                );
+            }
             let answer = self
                 .complete_extra(
                     &messages,
                     progress,
-                    self.config.tools_enabled,
+                    tools_available,
                     host.map(|h| h.definitions()).unwrap_or_default(),
                     CHAT_OUTPUT_TOKENS,
                 )
@@ -130,6 +138,9 @@ impl Runtime {
                 .filter(|calls| !calls.is_empty());
 
             if let Some(calls) = calls {
+                if !tools_available {
+                    return Err(failure("tool_step_limit", false));
+                }
                 self.append_tool_results(&mut messages, &answer, calls, step, host)
                     .await?;
                 continue;
@@ -157,10 +168,10 @@ impl Runtime {
                 "type": "function",
                 "function": {
                     "name": "current_time",
-                    "description": "返回当前 UTC 时间。",
+                    "description": "返回当前 UTC、指定 IANA 时区的当地时间和日期。默认 UTC；查询北京时间日资料时指定 Asia/Shanghai。",
                     "parameters": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {"timezone":{"type":"string","description":"IANA 时区，例如 Asia/Shanghai；省略时使用 UTC。"}},
                         "additionalProperties": false,
                     },
                 },
@@ -401,9 +412,9 @@ fn execute_tool(name: &str, arguments: &str) -> Value {
     if name != "current_time" {
         return json!({"error":"unknown_tool"});
     }
-    match serde_json::from_str::<Value>(arguments) {
-        Ok(Value::Object(args)) if args.is_empty() => json!({"utc":Utc::now().to_rfc3339()}),
-        _ => json!({"error":"invalid_arguments"}),
+    match serde_json::from_str::<time::Arguments>(arguments) {
+        Ok(args) => time::current(args, Utc::now()),
+        Err(_) => json!({"error":"invalid_arguments"}),
     }
 }
 
@@ -473,6 +484,46 @@ mod tests {
                 .await
                 .unwrap(),
             "时间已查询"
+        );
+        server.abort();
+    }
+    // 夹具连续请求工具直到预算耗尽，验证最后一轮关闭工具并保留部分结果；不验证真实模型服从说明的程度。
+    #[tokio::test]
+    async fn tool_budget_reserves_final_answer() {
+        use axum::{Json, Router, routing::post};
+        let app = Router::new().route("/v1/chat/completions",post(|Json(body):Json<Value>| async move {
+            let count=body["messages"].as_array().unwrap().iter().filter(|m|m["role"]=="tool").count();
+            let message=if body.get("tools").is_some() {
+                json!({"tool_calls":[{"id":format!("call_{count}"),"type":"function","function":{"name":"current_time","arguments":"{}"}}]})
+            } else {
+                assert_eq!(count,MAX_STEPS-1);
+                assert!(body["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().contains("尚未读取"));
+                json!({"content":"只汇总已读取的部分资料"})
+            };
+            Json(json!({"choices":[{"message":message}]}))
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let runtime = Runtime::new(ModelConfig {
+            base_url: format!("http://{address}/v1"),
+            model: "fixture".into(),
+            api_key: "fixture".into(),
+            tools_enabled: true,
+            stream_enabled: false,
+        })
+        .unwrap();
+        assert_eq!(
+            runtime
+                .run(&[Message {
+                    role: "user".into(),
+                    content: "查询多页资料".into()
+                }])
+                .await
+                .unwrap(),
+            "只汇总已读取的部分资料"
         );
         server.abort();
     }
