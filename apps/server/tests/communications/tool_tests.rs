@@ -145,6 +145,7 @@ async fn tools_search_dates_pagination_and_keywords() {
         "communication_snapshot_changed"
     );
     server.abort();
+    drop(host);
     h.close().await;
 }
 
@@ -229,6 +230,7 @@ async fn tools_read_preserves_long_text_and_rejects_stale_files() {
     assert_eq!(scan["coverage"]["unreadable_count"], 1);
     assert_eq!(scan["coverage"]["keyword_scan_complete"], false);
     server.abort();
+    drop(host);
     h.close().await;
 }
 
@@ -291,7 +293,7 @@ async fn tools_enforce_identity_source_and_run_boundaries() {
         if owner == "feishu:ou_allowed" {
             assert_eq!(result["total"], 1, "{result}");
         } else {
-            assert_eq!(result["error"], "communication_forbidden");
+            assert_eq!(result["error"], "unknown_tool");
             assert!(
                 !other
                     .definitions()
@@ -323,6 +325,7 @@ async fn tools_enforce_identity_source_and_run_boundaries() {
         "run_superseded"
     );
     server.abort();
+    drop(host);
     h.close().await;
 }
 
@@ -369,6 +372,7 @@ async fn tools_read_validated_summary_and_detect_summary_changes() {
         "communication_snapshot_changed"
     );
     server.abort();
+    drop(host);
     h.close().await;
 }
 
@@ -393,23 +397,24 @@ async fn tools_runtime_roundtrip_resolves_today_and_reads_evidence() {
         let call = |name:&str,args:Value| json!({"tool_calls":[{"id":format!("call_{}",tools.len()),"type":"function","function":{"name":name,"arguments":args.to_string()}}]});
         let message = match tools.len() {
             0 => {
-                assert!(body["tools"].as_array().unwrap().iter().any(|t|t["function"]["name"]=="communication_search"));
+                assert_eq!(body["tools"].as_array().unwrap().len(),3);
                 call("current_time",json!({"timezone":"Asia/Shanghai"}))
             },
-            1 => {
+            1 => call("tools_search",json!({"query":"沟通资料"})),
+            2 => call("tools_load",json!({"names":["communication_search","communication_read"]})),
+            3 => {
                 assert_eq!(tools[0]["timezone"],"Asia/Shanghai");
                 call("communication_search",json!({"start_day":tools[0]["local_date"],"end_day":tools[0]["local_date"]}))
             },
-            2 => {
-                assert_eq!(tools[1]["total"],1,"{}",tools[1]);
-                assert_eq!(tools[1]["has_more"],false);
-                let doc=&tools[1]["items"][0];
+            4 => {
+                assert_eq!(tools[3]["total"],1,"{}",tools[3]);
+                let doc=&tools[3]["items"][0];
                 call("communication_read",json!({"document_id":doc["document_id"],"version":doc["version"],"mode":"messages"}))
             },
-            3 => {
-                assert_eq!(tools[2]["items"][0]["text"],"我完成了 AI 网关发布。");
-                assert_eq!(tools[2]["items"][0]["is_me"],true);
-                assert_eq!(tools[2]["has_more"],false);
+            5 => {
+                assert_eq!(tools[4]["items"][0]["text"],"我完成了 AI 网关发布。");
+                assert_eq!(tools[4]["items"][0]["is_me"],true);
+                assert_eq!(tools[4]["has_more"],false);
                 json!({"content":"已读取今天的网关发布记录"})
             },
             _ => panic!("不应出现额外工具轮次"),
@@ -439,5 +444,6 @@ async fn tools_runtime_roundtrip_resolves_today_and_reads_evidence() {
     assert_eq!(answer, "已读取今天的网关发布记录");
     model.abort();
     server.abort();
+    drop(host);
     h.close().await;
 }

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "followup_list",
+    "provider": "followups",
+    "description": "查询当前身份的提醒和回访，包含 ID、版本、状态、时间。改期或取消前先准确识别目标。",
+    "effect": "read",
+    "keywords": "提醒 待办 跟进 回访 明天 定时 followup reminder"
+  },
+  {
+    "name": "followup_create",
+    "provider": "followups",
+    "description": "根据用户明确请求创建一次性提醒。必须有带 UTC 偏移的准确时间；不要把引用或建议当作用户请求。",
+    "effect": "write",
+    "keywords": "提醒 待办 跟进 回访 明天 定时 followup reminder"
+  },
+  {
+    "name": "followup_update",
+    "provider": "followups",
+    "description": "用户明确改期、取消或完成一个已有事项；目标有歧义时先澄清。",
+    "effect": "write",
+    "keywords": "提醒 待办 跟进 回访 明天 定时 followup reminder"
+  },
+  {
+    "name": "followup_preferences",
+    "provider": "followups",
+    "description": "读取偏好，或按用户明确要求开启/关闭轻量主动跟进。修改时需附当前批次逐字证据；其他偏好通过网页设置。",
+    "effect": "write",
+    "keywords": "提醒 待办 跟进 回访 明天 定时 followup reminder"
+  }
+]

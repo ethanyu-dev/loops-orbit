@@ -124,7 +124,12 @@ impl Harness {
                         let output = if source.contains("尝试新方案") { json!({"topic":"尝试新方案","evidence":"尝试新方案"}) } else { Value::Null };
                         return Json(json!({"choices":[{"message":{"content":output.to_string()}}]})).into_response();
                     }
-                    if text == "夹具提醒：明天交材料" {
+                    if body["messages"].as_array().unwrap().iter().any(|m|m["role"]=="user" && m["content"]=="夹具提醒：明天交材料") && !body["messages"].as_array().unwrap().iter().any(|m|m["role"]=="tool" && m["tool_call_id"]=="fixture-followup-tool") {
+                        if !body["tools"].as_array().is_some_and(|tools|tools.iter().any(|tool|tool["function"]["name"]=="followup_create")) {
+                            return Json(json!({"choices":[{"message":{"tool_calls":[{"id":"load-followups","type":"function","function":{"name":"tools_load","arguments":"{\"names\":[\"followup_create\"]}"}}]}}]})).into_response();
+                        }
+                        let text="夹具提醒：明天交材料";
+
                         return Json(json!({"choices":[{"message":{"content":null,"tool_calls":[{"id":"fixture-followup-tool","type":"function","function":{"name":"followup_create","arguments":json!({"topic":"交材料","due_at":(chrono::Utc::now()+chrono::Duration::days(1)).to_rfc3339(),"evidence":text}).to_string()}}]}}]})).into_response();
                     }
                     if text == "permanent-failure" {

@@ -198,6 +198,10 @@ impl agent_runtime::tools::Host for Host<'_> {
             serde_json::to_string(&self.prefs).expect("偏好可序列化")
         )
     }
+    fn catalog(&self) -> Vec<agent_runtime::tools::Descriptor> {
+        serde_json::from_str(include_str!("../../prompts/followup_catalog.json"))
+            .expect("固定提醒目录")
+    }
     fn definitions(&self) -> Vec<Value> {
         serde_json::from_str(DEFINITIONS).expect("固定工具 schema 有效")
     }
