@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Bell, Brain, Activity, Link2, MessageSquare, Search, SquarePen } from 'lucide-react';
+import { MessageSquare, Search, Plus, X } from 'lucide-react';
 import type { Conversation, Session } from '../types';
 import { OrbitMark } from '../components/OrbitMark';
-import { conversationPath, PAGE_PATHS, type Page } from './navigation';
+import { conversationPath, type Page } from './navigation';
+import { WorkspaceMenu } from './WorkspaceMenu';
 
 /** 侧栏只维护搜索展开与关键词，身份、导航和会话选择由应用统一管理。 */
 interface SidebarProps {
@@ -25,6 +26,10 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
   /** 选择历史会话并清除旧错误。 */
   onSelect: (id: string) => void;
+  /** 收起移动端侧栏。 */
+  onClose: () => void;
+  /** 退出当前登录。 */
+  onLogout: () => Promise<void>;
 }
 
 /** 工作空间导航与会话索引，不直接请求接口。 */
@@ -38,90 +43,82 @@ export function Sidebar({
   onNewChat,
   onNavigate,
   onSelect,
+  onClose,
+  onLogout,
 }: SidebarProps) {
+  const panel = useRef<HTMLElement>(null);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    panel.current?.querySelector<HTMLElement>('button')?.focus();
+    /** 移动侧栏打开时约束 Tab 顺序，关闭后回到原来的入口。 */
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(
+        panel.current?.querySelectorAll<HTMLElement>('button, a, input') ?? [],
+      ).filter(
+        (element) => !element.hasAttribute('disabled') && element.getClientRects().length > 0,
+      );
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      }
+      if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    document.addEventListener('keydown', trapFocus);
+    return () => {
+      document.removeEventListener('keydown', trapFocus);
+      previous?.focus();
+    };
+  }, [open]);
   return (
-    <aside className={`sidebar ${open ? 'open' : ''}`}>
-      <button className="brand" onClick={onNewChat}>
-        <OrbitMark small />
-        <span>
-          orbit<span className="brand-period">.</span>
-        </span>
-      </button>
-      <button className="new-chat" onClick={onNewChat}>
-        <SquarePen size={17} />
-        新建对话<kbd>⌘ K</kbd>
-      </button>
-      <div className="nav-label">工作空间</div>
-      <nav className="main-nav" aria-label="主导航">
-        <NavLink
-          className={page === 'chat' ? 'active' : ''}
-          to={PAGE_PATHS.chat}
-          onClick={() => onNavigate('chat')}
-        >
-          <MessageSquare size={17} />
-          对话空间
-        </NavLink>
-        <NavLink
-          className={page === 'memory' ? 'active' : ''}
-          to={PAGE_PATHS.memory}
-          onClick={() => onNavigate('memory')}
-        >
-          <Brain size={17} />
-          个人记忆
-        </NavLink>
-        <NavLink
-          className={page === 'followups' ? 'active' : ''}
-          to={PAGE_PATHS.followups}
-          onClick={() => onNavigate('followups')}
-        >
-          <Bell size={17} />
-          提醒与跟进
-          {unread > 0 && (
-            <span className="tag" aria-label={`${unread} 条未读`}>
-              {unread}
-            </span>
-          )}
-        </NavLink>
-        {session.identity.admin && (
-          <>
-            <NavLink
-              className={page === 'communications' ? 'active' : ''}
-              to={PAGE_PATHS.communications}
-              onClick={() => onNavigate('communications')}
-            >
-              <MessageSquare size={17} />
-              飞书沟通资料
-            </NavLink>
-            <NavLink
-              className={page === 'links' ? 'active' : ''}
-              to={PAGE_PATHS.links}
-              onClick={() => onNavigate('links')}
-            >
-              <Link2 size={17} />
-              访问链接
-            </NavLink>
-            <NavLink
-              className={page === 'status' ? 'active' : ''}
-              to={PAGE_PATHS.status}
-              onClick={() => onNavigate('status')}
-            >
-              <Activity size={17} />
-              运行状态
-            </NavLink>
-          </>
-        )}
-      </nav>
-      <div className="history-label">
-        <span>最近对话</span>
+    <aside
+      ref={panel}
+      id="workspace-sidebar"
+      aria-label="会话侧栏"
+      className={`sidebar ${open ? 'open' : ''}`}
+    >
+      <div className="sidebar-tools">
+        <button className="brand" onClick={onNewChat} aria-label="Orbit 新对话">
+          <OrbitMark small />
+          <span>
+            orbit<span className="brand-period">.</span>
+          </span>
+        </button>
         <button
           className="icon-button"
           aria-label="搜索对话"
-          onClick={() => setSearching(!searching)}
+          title="搜索对话"
+          aria-expanded={searching}
+          onClick={() => {
+            setSearching(!searching);
+            setQuery('');
+          }}
         >
-          <Search size={14} />
+          <Search size={19} />
         </button>
+        <button
+          className="icon-button"
+          aria-label="新建对话"
+          title="新建对话（⌘ / Ctrl K）"
+          onClick={onNewChat}
+        >
+          <Plus size={21} />
+        </button>
+        <button className="icon-button sidebar-close" aria-label="关闭侧栏" onClick={onClose}>
+          <X size={20} />
+        </button>
+      </div>
+      <div className="history-label">
+        <span>最近对话</span>
+        <span>{conversations.length || ''}</span>
       </div>
       {searching && (
         <input
@@ -143,12 +140,24 @@ export function Sidebar({
               className={page === 'chat' && selected === c.id ? 'selected' : ''}
               onClick={() => onSelect(c.id)}
             >
+              <MessageSquare size={17} aria-hidden="true" />
               <span>{c.title}</span>
               {c.channel === 'feishu' && <small>飞书</small>}
             </NavLink>
           ))}
         {!conversations.length && <p className="history-empty">新的想法，从这里开始。</p>}
+        {conversations.length > 0 &&
+          !conversations.some((c) => c.title.toLowerCase().includes(query.toLowerCase())) && (
+            <p className="history-empty">没有找到相关对话，换个关键词试试。</p>
+          )}
       </div>
+      <WorkspaceMenu
+        session={session}
+        page={page}
+        unread={unread}
+        onNavigate={onNavigate}
+        onLogout={onLogout}
+      />
     </aside>
   );
 }

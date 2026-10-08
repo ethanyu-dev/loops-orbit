@@ -1,5 +1,5 @@
 import { useEffect, useRef, type FormEvent } from 'react';
-import { ArrowRight, ArrowUp, ChevronDown, Globe2, Sparkles, Terminal, Zap } from 'lucide-react';
+import { ArrowRight, ArrowUp, Globe2, Sparkles, Terminal, Square, Zap } from 'lucide-react';
 import { Spinner } from '../../components/Feedback';
 
 // 输入框随草稿增高，但保留消息区域的可见空间。
@@ -56,6 +56,7 @@ export function Composer({
   /** 按钮提交和键盘提交共享流程，完成后恢复输入焦点。 */
   async function submit(event?: FormEvent) {
     event?.preventDefault();
+    if (sending || stopping || !draft.trim()) return;
     await send();
     textarea.current?.focus();
   }
@@ -66,22 +67,26 @@ export function Composer({
           ref={textarea}
           aria-label="发送消息"
           placeholder={pending ? '可以继续补充，也可以改主意…' : '向 Orbit 提问，或者一起想点什么…'}
-          rows={2}
+          rows={1}
           maxLength={24000}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (
+              e.key === 'Enter' &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing &&
+              e.nativeEvent.keyCode !== 229
+            ) {
               e.preventDefault();
               void submit();
             }
           }}
         />
         <div className="composer-bottom">
-          <span className="composer-model">
+          <span className="composer-model" title={`当前模型：${model}`}>
             <Zap size={14} />
-            {model}
-            <ChevronDown size={13} />
+            <span>{model}</span>
           </span>
           <span className="composer-hint">Shift + Enter 换行</span>
           {pending && (
@@ -91,12 +96,14 @@ export function Composer({
               disabled={stopping || sending}
               onClick={() => void stop()}
             >
+              <Square size={12} fill="currentColor" />
               {stopping ? '正在停止' : '停止回复'}
             </button>
           )}
           <button
             className="send-button"
-            aria-label="发送"
+            aria-label={pending ? '发送补充' : '发送'}
+            title={pending ? '发送补充' : '发送消息'}
             disabled={sending || stopping || !draft.trim()}
           >
             {sending ? <Spinner /> : <ArrowUp size={19} />}

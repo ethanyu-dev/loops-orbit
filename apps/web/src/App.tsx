@@ -1,13 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 import { api, ApiError, errorText } from './api';
 import type { Conversation, Session } from './types';
 import { OrbitMark } from './components/OrbitMark';
 import { Spinner } from './components/Feedback';
 import { PageBoundary } from './components/PageBoundary';
 import { Sidebar } from './layout/Sidebar';
-import { Header } from './layout/Header';
 import { useWorkspaceNavigation } from './layout/useWorkspaceNavigation';
 import { Login } from './features/auth/Login';
 import { useNotifications } from './features/followups/useNotifications';
@@ -100,6 +99,14 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
   }, [newChat]);
+  useEffect(() => {
+    const desktop = window.matchMedia('(min-width: 761px)');
+    const closeOnDesktop = () => {
+      if (desktop.matches) setSidebar(false);
+    };
+    desktop.addEventListener('change', closeOnDesktop);
+    return () => desktop.removeEventListener('change', closeOnDesktop);
+  }, []);
   /** 服务端注销成功后再清理本地身份和导航。 */
   async function logout() {
     try {
@@ -132,6 +139,8 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
         conversations={conversations}
         open={sidebar}
         unread={notifications.data.unread}
+        onClose={() => setSidebar(false)}
+        onLogout={logout}
         onNewChat={newChat}
         onNavigate={() => {
           setSidebar(false);
@@ -141,13 +150,16 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
           setError('');
         }}
       />
-      <main className="main-panel">
-        <Header
-          page={page}
-          session={session}
-          onLogout={logout}
-          onOpenSidebar={() => setSidebar(true)}
-        />
+      <main className="main-panel" inert={sidebar}>
+        <button
+          className="icon-button mobile-menu"
+          aria-label="打开侧栏"
+          aria-expanded={sidebar}
+          aria-controls="workspace-sidebar"
+          onClick={() => setSidebar(true)}
+        >
+          <Menu size={20} />
+        </button>
         {error && (
           <div className="global-error" role="alert">
             {error}

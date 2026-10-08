@@ -1,0 +1,387 @@
+/* 订阅默认只显示概况，进度细项和候选列表按需展开。 */
+.subscription-manager {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.subscription-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+}
+.subscription-toolbar h2 {
+  font-size: 17px;
+  font-weight: 550;
+}
+.subscription-toolbar p {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.subscription-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.subscription-toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-size: 12px;
+}
+.subscription-toolbar-actions .subscription-add {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.subscription-toolbar-actions .subscription-add:hover {
+  color: var(--on-accent);
+  background: var(--secondary);
+}
+.subscription-remove-all {
+  color: var(--danger);
+}
+.subscription-remove-all:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.subscription-picker {
+  padding: 0 20px 16px;
+}
+.subscription-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px 16px;
+}
+.subscription-tabs {
+  display: flex;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.subscription-tabs button {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 9px 0;
+  border-bottom: 2px solid transparent;
+}
+.subscription-tabs button[aria-pressed='true'] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+.subscription-tabs span {
+  margin-left: 4px;
+  font-size: 11px;
+}
+.subscription-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  max-width: 265px;
+  min-width: 0;
+  color: var(--muted);
+}
+.subscription-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+.subscription-search input:focus-visible {
+  outline: none;
+}
+.subscription-search:focus-within {
+  border-color: var(--border);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.subscription-search svg {
+  flex-shrink: 0;
+}
+.subscription-columns,
+.subscription-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 94px 125px 115px;
+  align-items: center;
+  gap: 14px;
+  padding: 0 20px;
+}
+.subscription-columns {
+  height: 35px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel);
+  border-block: 1px solid var(--line);
+}
+.subscription-columns > :last-child {
+  text-align: right;
+}
+.subscription-row {
+  min-height: 54px;
+}
+.subscription-item + .subscription-item {
+  border-top: 1px solid var(--line);
+}
+.subscription-row:hover {
+  background: var(--panel);
+}
+.subscription-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+  padding: 10px 0;
+  font-size: 13px;
+}
+.subscription-name svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.subscription-name span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subscription-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.subscription-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.subscription-status.failed {
+  color: var(--danger);
+}
+.subscription-progress {
+  font-size: 12px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+.subscription-progress > span {
+  color: var(--muted);
+}
+.subscription-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+.subscription-actions .icon-button {
+  width: 30px;
+  height: 30px;
+}
+.subscription-restore {
+  font-size: 11px;
+  padding: 5px;
+  white-space: nowrap;
+}
+.subscription-details {
+  padding: 4px 20px 14px 42px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel);
+  line-height: 1.8;
+}
+.subscription-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 18px;
+  margin-top: 6px;
+}
+.subscription-notice,
+.subscription-archive-note {
+  font-size: 12px;
+  margin: 0 20px 14px;
+  color: var(--secondary);
+  line-height: 1.8;
+}
+.subscription-notice {
+  padding: 10px 12px;
+  background: var(--panel);
+  border-radius: 7px;
+}
+.subscription-empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 40px 20px;
+}
+.subscription-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 12px 20px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.subscription-pagination > span {
+  margin-right: auto;
+}
+.subscription-pagination button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+/* 原生模态框独立于页面卡片样式，焦点与背景遮挡由浏览器管理。 */
+.subscription-dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: 0 24px 80px #0003;
+}
+.subscription-dialog::backdrop {
+  background: #0006;
+}
+.subscription-dialog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.subscription-dialog-heading h2 {
+  font-size: 19px;
+  font-weight: 550;
+}
+.subscription-dialog > p {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.subscription-delete-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 22px 0 14px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+}
+.subscription-delete-option input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--text);
+  flex-shrink: 0;
+}
+.subscription-delete-option strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+}
+.subscription-delete-option small {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.subscription-dialog > .subscription-delete-warning,
+.subscription-dialog > .subscription-dialog-error {
+  color: var(--danger);
+}
+.subscription-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.subscription-dialog-actions button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 15px;
+  font-size: 13px;
+}
+.subscription-dialog-actions .confirm-removal {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.subscription-dialog-actions .confirm-removal:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--secondary);
+}
+@media (max-width: 1000px) {
+  .subscription-columns,
+  .subscription-row {
+    grid-template-columns: minmax(100px, 1fr) 72px 90px 103px;
+    gap: 8px;
+    padding-inline: 14px;
+  }
+}
+@media (max-width: 760px) {
+  .subscription-toolbar,
+  .subscription-filters {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+  }
+  .subscription-filters {
+    padding-top: 0;
+  }
+  .subscription-toolbar-actions {
+    flex-wrap: wrap;
+  }
+  .subscription-search {
+    max-width: none;
+  }
+  .subscription-search input {
+    font-size: 16px;
+  }
+  .subscription-columns {
+    display: none;
+  }
+  .subscription-list {
+    border-top: 1px solid var(--line);
+  }
+  .subscription-row {
+    grid-template-columns: minmax(0, 1fr) 110px;
+    gap: 0 10px;
+    padding-block: 8px;
+  }
+  .subscription-name {
+    grid-column: 1;
+    padding: 4px 0;
+  }
+  .subscription-actions {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+  .subscription-status {
+    grid-column: 1;
+    padding-left: 22px;
+  }
+  .subscription-progress {
+    display: none;
+  }
+  .subscription-details {
+    padding-left: 36px;
+  }
+}

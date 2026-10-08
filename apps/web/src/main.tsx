@@ -5,6 +5,7 @@ import { migrateLegacyLocation } from './layout/navigation';
 import './theme.css';
 import './styles.css';
 import './console.css';
+import './workspace.css';
 import { applyTheme, readTheme } from './features/theme/theme';
 
 applyTheme(readTheme());

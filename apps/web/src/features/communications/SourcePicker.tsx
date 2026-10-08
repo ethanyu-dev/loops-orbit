@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { Source } from './types';
+import { Search } from 'lucide-react';
+import './source-picker.css';
 
 // 候选分页与日期探测均有界，失败会话不会被当成无消息静默隐藏。
 const MAX_PAGES = 200;
@@ -44,7 +46,7 @@ export function SourcePicker({
   const [applied, setApplied] = useState('');
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
-  const subscribed = new Set(sources.map((s) => s.chat_id));
+  const subscribed = new Set(sources.filter((s) => s.subscribed !== false).map((s) => s.chat_id));
   const visible = chats.filter(
     (c) =>
       c.active !== false &&
@@ -159,127 +161,153 @@ export function SourcePicker({
     }
   }
   return (
-    <section className="settings-card communication-card">
-      <h2>选择订阅会话</h2>
-      <p>
-        只同步你主动选择的会话。单聊保留全部消息，群聊仅提取你发送、明确 @你或直接回复你的内容。
-      </p>
+    <section className="source-picker" aria-labelledby="source-picker-title">
+      <div className="source-picker-heading">
+        <h3 id="source-picker-title">选择订阅会话</h3>
+        <details>
+          <summary>同步范围说明</summary>
+          <p>
+            只同步你主动选择的会话。单聊保留全部消息，群聊仅提取你发送、明确
+            @你或直接回复你的内容。日期仅用于查找会话，订阅后从现在开始同步；历史消息需单独导入。
+          </p>
+        </details>
+      </div>
       <form
+        className="source-picker-filter"
         onSubmit={(event) => {
           event.preventDefault();
           void load();
         }}
       >
-        <label className="subscription-switch">
+        <label className="source-picker-date-toggle">
           <input
             type="checkbox"
             checked={filterDates}
             disabled={busy || saving}
-            onChange={(e) => setFilterDates(e.target.checked)}
+            onChange={(event) => setFilterDates(event.target.checked)}
           />
           仅查找日期内有消息的会话
         </label>
-        {filterDates && (
-          <div className="history-dates">
-            <label>
-              开始日期
+        <div className="source-picker-filter-controls">
+          {filterDates && (
+            <div className="source-picker-dates">
               <input
                 type="date"
+                aria-label="开始日期"
+                title="开始日期（北京时间）"
                 required
                 value={start}
                 max={end}
                 disabled={busy || saving}
-                onChange={(e) => setStart(e.target.value)}
+                onChange={(event) => setStart(event.target.value)}
               />
-            </label>
-            <label>
-              结束日期
+              <span aria-hidden="true">—</span>
               <input
                 type="date"
+                aria-label="结束日期"
+                title="结束日期（北京时间）"
                 required
                 value={end}
                 min={start}
                 max={date()}
                 disabled={busy || saving}
-                onChange={(e) => setEnd(e.target.value)}
+                onChange={(event) => setEnd(event.target.value)}
               />
-            </label>
-          </div>
-        )}
-        <div className="source-actions">
-          <button className="primary" disabled={busy || saving}>
-            {busy ? `已检查 ${scanned} 个会话…` : '筛选会话'}
+            </div>
+          )}
+          <button className="source-picker-filter-button" disabled={busy || saving}>
+            {busy ? `已检查 ${scanned} 个…` : '筛选会话'}
           </button>
           {busy && (
             <button type="button" onClick={() => controller.current?.abort()}>
-              停止筛选
+              停止
             </button>
           )}
         </div>
       </form>
-      {applied && <p>当前结果：{applied} · 日期筛选不自动订阅，也不自动导入历史。</p>}
-      <label>
-        搜索候选会话
-        <input
-          type="search"
-          value={query}
-          placeholder="联系人或群聊名称"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
-      <div className="history-selection-actions">
-        <button
-          disabled={busy || saving || !eligible.length}
-          onClick={() => setSelected(new Set([...selected, ...eligible.map((c) => c.chat_id)]))}
-        >
-          全选当前结果（{eligible.length}）
-        </button>
-        <button disabled={saving || !selected.size} onClick={() => setSelected(new Set())}>
-          清空选择
-        </button>
+      {applied && <p className="source-picker-applied">当前结果：{applied}</p>}
+      <div className="source-picker-toolbar">
+        <label className="source-picker-search">
+          <Search size={14} />
+          <input
+            type="search"
+            aria-label="搜索候选会话"
+            value={query}
+            placeholder="搜索联系人或群聊"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <div className="source-picker-selection">
+          <button
+            disabled={busy || saving || !eligible.length}
+            onClick={() =>
+              setSelected(new Set([...selected, ...eligible.map((chat) => chat.chat_id)]))
+            }
+          >
+            全选结果{eligible.length > 0 ? ` (${eligible.length})` : ''}
+          </button>
+          <button disabled={saving || !selected.size} onClick={() => setSelected(new Set())}>
+            清空
+          </button>
+        </div>
       </div>
-      <div className="history-source-options" role="group" aria-label="选择订阅会话">
+      <div
+        className="source-picker-options"
+        role="group"
+        aria-label="选择订阅会话"
+        aria-busy={busy}
+      >
         {visible.map((chat) => (
-          <label className="history-source-option" key={chat.chat_id}>
+          <label className="source-picker-option" key={chat.chat_id}>
             <input
               type="checkbox"
               disabled={saving || subscribed.has(chat.chat_id) || chat.failed}
               checked={selected.has(chat.chat_id) || subscribed.has(chat.chat_id)}
-              onChange={(e) => {
+              onChange={(event) => {
                 const next = new Set(selected);
-                if (e.target.checked) next.add(chat.chat_id);
+                if (event.target.checked) next.add(chat.chat_id);
                 else next.delete(chat.chat_id);
                 setSelected(next);
               }}
             />
-            <span>
+            <span className="source-picker-name" title={chat.name || chat.chat_id}>
               {chat.name || chat.chat_id}
-              {subscribed.has(chat.chat_id)
-                ? ' · 已订阅（启停见下方）'
-                : chat.failed
-                  ? ' · 日期查询失败'
-                  : ''}
             </span>
+            {subscribed.has(chat.chat_id) ? (
+              <small>已订阅</small>
+            ) : chat.failed ? (
+              <small className="source-picker-failed">查询失败</small>
+            ) : null}
           </label>
         ))}
         {!visible.length && (
-          <p>
+          <p className="source-picker-empty">
             {busy
-              ? '正在查找…'
+              ? '正在查找会话…'
               : applied
-                ? '没有匹配的会话，可调整日期或关键词。'
+                ? '没有匹配的会话，试试调整日期或关键词。'
                 : '先筛选会话，再勾选需要订阅的联系人或群聊。'}
           </p>
         )}
       </div>
-      <button
-        className="primary"
-        disabled={busy || saving || !selected.size}
-        onClick={() => void subscribe()}
-      >
-        {saving ? '正在订阅…' : `订阅所选会话（${selected.size}）`}
-      </button>
-      {notice && <p role="status">{notice}</p>}
+      <div className="source-picker-footer">
+        <span>
+          已选 <strong>{selected.size}</strong> 个
+          <span className="source-picker-result-count"> · 当前显示 {visible.length} 个会话</span>
+        </span>
+        <button
+          className="source-picker-submit"
+          disabled={busy || saving || !selected.size}
+          onClick={() => void subscribe()}
+        >
+          {saving ? '正在订阅…' : `订阅所选${selected.size ? ` (${selected.size})` : ''}`}
+        </button>
+      </div>
+      {notice && (
+        <p className="source-picker-notice" role="status">
+          {notice}
+        </p>
+      )}
     </section>
   );
 }

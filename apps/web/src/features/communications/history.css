@@ -1,0 +1,542 @@
+/* 历史导入独立于旧卡片样式，概况常驻，表单和任务细节按需展开。 */
+.sync-workspace {
+  display: grid;
+  gap: 18px;
+}
+.sync-import,
+.sync-progress {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.sync-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+}
+.sync-heading h2 {
+  font-size: 17px;
+  font-weight: 550;
+}
+.sync-heading h3 {
+  font-size: 14px;
+  font-weight: 550;
+}
+.sync-heading h3 small {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.sync-heading p,
+.sync-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin-top: 5px;
+}
+.sync-button,
+.sync-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sync-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.sync-primary:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--secondary);
+}
+.sync-workspace button:disabled,
+.sync-dialog button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.sync-import-fields {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+  padding: 20px;
+  min-width: 0;
+}
+.sync-field-heading {
+  font-size: 13px;
+  font-weight: 550;
+  margin-bottom: 12px;
+}
+.sync-field-heading small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.sync-scope,
+.sync-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sync-scope button,
+.sync-presets button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.sync-scope button[aria-pressed='true'],
+.sync-presets button[aria-pressed='true'] {
+  border-color: var(--text);
+  background: var(--panel);
+}
+.sync-import-fields > .sync-note {
+  margin: 10px 0 24px;
+}
+.sync-dates {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.sync-dates > span {
+  margin-top: 20px;
+  color: var(--muted);
+}
+.sync-dates label {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+.sync-dates input,
+.sync-import .history-source-picker input[type='search'],
+.sync-task-filters select {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+  min-width: 0;
+}
+.sync-submit {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.sync-submit p {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.sync-submit small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sync-import .history-source-picker {
+  margin-top: 16px;
+}
+.sync-import .history-source-picker > label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.sync-import .history-selection-actions button {
+  font-size: 12px;
+  padding: 6px 0;
+}
+.sync-import .history-source-options {
+  max-height: 220px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.sync-import .history-source-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.sync-import .history-source-option input {
+  accent-color: var(--text);
+  flex-shrink: 0;
+}
+.sync-import .history-source-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0 20px;
+  gap: 16px;
+}
+.sync-overview article {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  min-width: 0;
+}
+.sync-stage-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sync-stage-title > span {
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 4px;
+}
+.sync-stage-title h3 {
+  font-size: 13px;
+  font-weight: 500;
+}
+.sync-stage-title small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+.sync-metric {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 16px 0 12px;
+}
+.sync-metric strong {
+  font-size: 28px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.sync-metric > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.sync-overview progress {
+  display: block;
+  width: 100%;
+  height: 5px;
+  border: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  accent-color: var(--text);
+  background: var(--panel);
+}
+.sync-overview progress::-webkit-progress-bar {
+  background: var(--panel);
+}
+.sync-overview progress::-webkit-progress-value {
+  background: var(--text);
+  border-radius: 6px;
+}
+.sync-overview progress::-moz-progress-bar {
+  background: var(--text);
+}
+.sync-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 15px;
+  margin: 14px 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sync-counts b {
+  color: var(--text);
+  font-weight: 500;
+  margin-left: 3px;
+}
+.sync-counts .error-text b {
+  color: var(--danger);
+}
+.sync-notice,
+.sync-alert {
+  margin: 0 20px 16px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+  border-radius: 7px;
+  background: var(--panel);
+}
+.sync-alert {
+  margin-top: 16px;
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.sync-alert a {
+  margin-left: 10px;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.sync-explanation {
+  padding: 14px 20px 18px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.sync-explanation summary {
+  cursor: pointer;
+}
+.sync-explanation p {
+  margin-top: 8px;
+}
+.sync-tasks {
+  border-top: 1px solid var(--line);
+}
+.sync-task-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 20px 16px;
+  font-size: 12px;
+}
+.sync-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  min-width: 0;
+}
+.sync-search input {
+  width: 200px;
+  min-width: 0;
+  border: 0;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+}
+.sync-search:focus-within {
+  outline: 2px solid var(--border);
+}
+.sync-search input:focus-visible {
+  outline: none;
+}
+.sync-task-filters > span {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sync-task-columns,
+.sync-task > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 80px;
+  gap: 16px;
+  padding: 0 20px;
+  align-items: center;
+}
+.sync-task-columns {
+  height: 34px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel);
+  border-block: 1px solid var(--line);
+}
+.sync-task-columns > :last-child,
+.sync-task-pages {
+  text-align: right;
+}
+.sync-task + .sync-task {
+  border-top: 1px solid var(--line);
+}
+.sync-task > summary {
+  min-height: 62px;
+  cursor: pointer;
+  list-style: none;
+}
+.sync-task > summary::-webkit-details-marker {
+  display: none;
+}
+.sync-task > summary:hover {
+  background: var(--panel);
+}
+.sync-task-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.sync-task-name svg {
+  flex-shrink: 0;
+  color: var(--muted);
+  transform: rotate(-90deg);
+}
+.sync-task[open] .sync-task-name svg {
+  transform: rotate(0);
+}
+.sync-task-name > span {
+  min-width: 0;
+}
+.sync-task-name strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-task-name small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.sync-task-status,
+.sync-task-pages {
+  font-size: 11px;
+  color: var(--muted);
+}
+.sync-task-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sync-task-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sync-task-detail {
+  padding: 8px 20px 16px 43px;
+  font-size: 12px;
+  line-height: 1.8;
+  background: var(--panel);
+  overflow-wrap: anywhere;
+}
+.sync-task-detail button {
+  margin-top: 10px;
+}
+.sync-empty {
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 2;
+}
+.sync-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: 0 24px 80px #0003;
+}
+.sync-dialog::backdrop {
+  background: #0006;
+}
+.sync-dialog h2 {
+  font-size: 18px;
+  margin-bottom: 16px;
+}
+.sync-dialog p {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.sync-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+.sync-workspace .error-text,
+.sync-dialog .error-text {
+  color: var(--danger);
+}
+@media (max-width: 760px) {
+  .sync-heading {
+    padding: 16px;
+    gap: 10px;
+  }
+  .sync-heading p {
+    font-size: 11px;
+  }
+  .sync-overview {
+    grid-template-columns: 1fr;
+    padding: 0 16px;
+  }
+  .sync-import-fields {
+    padding: 16px;
+  }
+  .sync-dates {
+    gap: 8px;
+  }
+  .sync-dates label {
+    flex: 1;
+  }
+  .sync-dates input {
+    width: 100%;
+    font-size: 14px;
+  }
+  .sync-submit {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .sync-import .history-source-options {
+    grid-template-columns: 1fr;
+  }
+  .sync-task-columns,
+  .sync-task > summary {
+    grid-template-columns: minmax(0, 1fr) 86px;
+    gap: 10px;
+    padding-inline: 16px;
+  }
+  .sync-task-columns > :last-child,
+  .sync-task-pages {
+    display: none;
+  }
+  .sync-task-filters {
+    padding-inline: 16px;
+  }
+  .sync-search {
+    width: 100%;
+  }
+  .sync-search input {
+    width: 100%;
+    font-size: 16px;
+  }
+  .sync-task-filters select {
+    font-size: 16px;
+  }
+  .sync-task-detail {
+    padding-left: 39px;
+  }
+}
+.sync-import .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.sync-import .history-source-options {
+  display: grid;
+}

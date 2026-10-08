@@ -1,0 +1,245 @@
+/* 添加订阅使用独立紧凑布局，避免继承通用设置卡片的大间距与表单样式。 */
+.source-picker {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 14px;
+  font-size: 12px;
+}
+.source-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.source-picker-heading h3 {
+  font-size: 13px;
+  font-weight: 550;
+}
+.source-picker-heading details {
+  position: relative;
+  font-size: 11px;
+  color: var(--muted);
+}
+.source-picker-heading summary {
+  cursor: pointer;
+}
+.source-picker-heading details p {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  top: 24px;
+  width: min(340px, calc(100vw - 100px));
+  padding: 12px;
+  line-height: 1.8;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 5px 20px #0001;
+}
+.source-picker-filter,
+.source-picker-filter-controls,
+.source-picker-dates {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.source-picker-filter {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.source-picker-date-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--secondary);
+  cursor: pointer;
+}
+.source-picker input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--text);
+}
+.source-picker-dates input {
+  min-width: 0;
+  width: 136px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.source-picker-dates > span {
+  color: var(--muted);
+}
+.source-picker button {
+  font-size: 11px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.source-picker button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.source-picker .source-picker-filter-button {
+  border: 1px solid var(--line);
+}
+.source-picker-applied {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+.source-picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 8px;
+}
+.source-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: var(--muted);
+}
+.source-picker-search input {
+  background: transparent;
+  border: 0;
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.source-picker-search svg {
+  flex-shrink: 0;
+}
+.source-picker-search:focus-within {
+  outline: 2px solid var(--border);
+}
+.source-picker-search input:focus-visible {
+  outline: none;
+}
+.source-picker-selection {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.source-picker-options {
+  max-height: 248px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.source-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  min-height: 36px;
+  cursor: pointer;
+}
+.source-picker-option + .source-picker-option {
+  border-top: 1px solid var(--line);
+}
+.source-picker-option:hover {
+  background: var(--panel);
+}
+.source-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-picker-option small {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.source-picker-option .source-picker-failed {
+  color: var(--danger);
+}
+.source-picker-empty {
+  text-align: center;
+  padding: 15px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.source-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.source-picker-footer strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.source-picker .source-picker-submit {
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 8px 12px;
+}
+.source-picker .source-picker-submit:hover:not(:disabled) {
+  background: var(--secondary);
+  color: var(--on-accent);
+}
+.source-picker-notice {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.8;
+  margin-top: 10px;
+}
+@media (max-width: 760px) {
+  .source-picker {
+    padding: 12px;
+  }
+  .source-picker-filter-controls {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .source-picker-dates {
+    width: 100%;
+  }
+  .source-picker-dates input {
+    flex: 1;
+    width: 0;
+    font-size: 13px;
+  }
+  .source-picker-toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .source-picker-search {
+    flex-basis: 100%;
+  }
+  .source-picker-search input {
+    font-size: 16px;
+  }
+  .source-picker-selection {
+    margin-left: auto;
+  }
+  .source-picker-option {
+    min-height: 40px;
+  }
+  .source-picker-result-count {
+    display: none;
+  }
+}

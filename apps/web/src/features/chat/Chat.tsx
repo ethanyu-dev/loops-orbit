@@ -49,8 +49,7 @@ export function Chat({
           <div className="welcome-mark">
             <OrbitMark />
           </div>
-          <div className="eyebrow">YOUR PERSONAL AGENT</div>
-          <h1>想法，从这里继续。</h1>
+          <h1>今天，想聊点什么？</h1>
           <p>聊聊正在发生的事，让 Orbit 和你一起往前走。</p>
         </div>
       ) : (

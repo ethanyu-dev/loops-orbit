@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { ArrowDown, Check, Copy } from 'lucide-react';
 import { useMessageScroll } from './useMessageScroll';
 import { Answer } from './Answer';
@@ -25,6 +25,8 @@ export function MessageList({
   /** 复制失败时由应用显示错误。 */
   report: (error: unknown) => void;
 }) {
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
   const [copied, setCopied] = useState<number | null>(null);
   const { viewport, content, atBottom, onScroll, scrollToLatest } = useMessageScroll();
   /** 复制状态局限于消息列表，不影响会话或任务状态。 */
@@ -32,7 +34,8 @@ export function MessageList({
     try {
       await navigator.clipboard.writeText(content);
       setCopied(id);
-      setTimeout(() => setCopied(null), COPY_FEEDBACK_MS);
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(null), COPY_FEEDBACK_MS);
     } catch {
       report(new Error('clipboard'));
     }
@@ -65,11 +68,13 @@ export function MessageList({
                         </div>
                         <Answer content={message.content} />
                         <button
+                          title={copied === message.id ? '已复制' : '复制回复'}
                           className="copy-message"
                           aria-label="复制回复"
                           onClick={() => void copy(message.id, message.content)}
                         >
                           {copied === message.id ? <Check size={14} /> : <Copy size={14} />}
+                          <span>{copied === message.id ? '已复制' : '复制'}</span>
                         </button>
                       </>
                     ) : (
@@ -81,10 +86,10 @@ export function MessageList({
                         {run?.status === 'superseded' && (
                           <small className="run-note">已与后续消息一起处理</small>
                         )}
-                        {detail.runs.find((r) => r.id === message.run_id)?.status === 'failed' && (
+                        {run?.status === 'failed' && (
                           <div className="run-error">
                             这次运行未完成。你可以重新发送消息。
-                            <small>{detail.runs.find((r) => r.id === message.run_id)?.error}</small>
+                            <small>{run?.error}</small>
                           </div>
                         )}
                       </>
@@ -105,7 +110,8 @@ export function MessageList({
               </Fragment>
             );
           })}
-          {pending.length > 0 && (
+          {/* 已有流式正文时由消息自身提示进度，避免重复显示两组正在回复。 */}
+          {pending.length > 0 && !pending.some((run) => run.partial_content) && (
             <div className="thinking" role="status">
               <OrbitMark small />
               <span className="thinking-dots">
@@ -116,11 +122,9 @@ export function MessageList({
               <span>
                 {pending.some((r) => r.phase === 'context')
                   ? '正在衔接前面的对话'
-                  : pending.some((r) => r.partial_content)
-                    ? '正在回复'
-                    : pending.some((r) => r.status === 'running')
-                      ? '正在思考'
-                      : '正在接收你的补充'}
+                  : pending.some((r) => r.status === 'running')
+                    ? '正在思考'
+                    : '正在接收你的补充'}
               </span>
             </div>
           )}

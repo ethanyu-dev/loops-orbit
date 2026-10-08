@@ -109,12 +109,17 @@ pub(super) async fn step(state: &AppState) -> ApiResult<bool> {
     else {
         return Ok(false);
     };
-    sqlx::query(
-        "UPDATE communication_documents SET next_summary=now()+interval '5 minutes' WHERE id=$1",
+    // 图片解读或原文更新会推进版本并重新排队；旧候选不能覆盖新版本的立即重试时间。
+    let claimed = sqlx::query(
+        "UPDATE communication_documents SET next_summary=now()+interval '5 minutes' WHERE id=$1 AND version=$2 AND summary_hash IS NULL AND next_summary<=now()",
     )
     .bind(doc.id)
+    .bind(doc.version)
     .execute(&state.pool)
     .await?;
+    if claimed.rows_affected() == 0 {
+        return Ok(false);
+    }
     let result = generate(state, &doc).await;
     if let Err(error) = result {
         sqlx::query("UPDATE communication_documents SET summary_error=$2 WHERE id=$1 AND version=$3 AND summary_hash IS NULL").bind(doc.id).bind(error.1).bind(doc.version).execute(&state.pool).await?;
