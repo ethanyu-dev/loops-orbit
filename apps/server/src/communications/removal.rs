@@ -106,6 +106,10 @@ pub(super) async fn remove(
         }));
     }
     let mut tx = state.pool.begin().await?;
+    // 与私聊自动发现共用连接行锁，跨实例移除也不能被在途发现重新添加。
+    sqlx::query("SELECT owner FROM communication_connections WHERE owner='admin' FOR UPDATE")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=ANY($1) ON CONFLICT DO NOTHING")
         .bind(&ids).execute(&mut *tx).await?;
     sqlx::query("UPDATE communication_sources SET enabled=false,version=version+1,page_token='',window_start=NULL,window_end=NULL,error=NULL WHERE id=ANY($1)")

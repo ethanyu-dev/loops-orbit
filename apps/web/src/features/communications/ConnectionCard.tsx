@@ -45,7 +45,7 @@ export function ConnectionCard({
           </div>
           <h2>{data.connection ? data.connection.name : '连接飞书'}</h2>
           {!data.connection && (
-            <p>手动选择要订阅的会话，在对话中查找与你相关的讨论、决定和待办。</p>
+            <p>连接后默认自动订阅私聊；群聊由你手动选择，在对话中查找相关讨论、决定和待办。</p>
           )}
           {data.connection?.status === 'reauthorize' && (
             <p className="login-error" role="alert">
@@ -76,7 +76,10 @@ export function ConnectionCard({
           <div>
             <h3>你始终掌握范围</h3>
             <p>
-              仅同步你手动订阅的会话，历史由你选择日期补录。单聊保留全部消息；群聊只提取你发送、明确
+              {data.connection?.auto_subscribe_private
+                ? '私聊默认自动订阅，群聊需手动选择；暂停或移除的私聊不会被自动恢复。'
+                : '仅同步已订阅会话。'}
+              历史由你选择日期补录。单聊保留全部消息；群聊只提取你发送、明确
               @你或直接回复你的消息。资料仅供此管理员工作空间及同一飞书账号使用。文字和可访问的图片交给已配置的多模态模型整理，图片资源按需读取，不公开带授权的链接；文件和语音暂不解析。你可以暂停或移除会话。
             </p>
           </div>

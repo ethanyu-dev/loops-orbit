@@ -104,6 +104,8 @@ export interface Snapshot {
     open_id: string;
     status: string;
     auto_subscribe: boolean;
+    /** 私聊独立自动发现，群聊仍需手动选择；旧服务缺失时不宣称启用。 */
+    auto_subscribe_private?: boolean;
     subscription_since: number;
     discovery_error: string | null;
   } | null;
