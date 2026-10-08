@@ -20,6 +20,8 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(index))
+        .route("/library/days", get(super::library::days))
+        .route("/library/files", get(super::library::files))
         .route("/history", post(super::history::batch))
         .route("/history/cancel", post(super::history::cancel))
         .route("/history/progress", get(super::history::progress))
@@ -34,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/chats", get(chats))
         .route("/chats/activity", post(super::extraction::activity))
         .route("/sources", post(add))
+        .route("/sources/remove", post(super::removal::remove))
         .route("/sources/{id}", axum::routing::put(update).delete(remove))
         .route("/sources/{id}/sync", post(sync_now))
         .route("/documents/{id}", get(document))
@@ -59,8 +62,19 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     .await?;
     let jobs: Vec<super::subscription::HistoryJob> = sqlx::query_as("SELECT id,version,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs ORDER BY created_at DESC LIMIT 100").fetch_all(&state.pool).await?;
     let progress = super::progress::read(&state).await?;
+    // 版本摘要必须来自同一份展示快照，避免计数和确认范围跨请求漂移。
+    let mut subscriptions = sources
+        .iter()
+        .filter(|source| source.subscribed)
+        .map(|source| super::removal::SubscriptionVersion {
+            id: source.id,
+            version: source.version,
+        })
+        .collect::<Vec<_>>();
+    subscriptions.sort_by_key(|source| source.id);
+    let subscription_revision = super::removal::revision(&subscriptions);
     Ok(Json(
-        json!({"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
+        json!({"subscription_revision":subscription_revision,"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
     ))
 }
 /// 浏览器按页加载候选，读取列表不会创建订阅。
@@ -158,8 +172,13 @@ async fn add(
     let mode = super::extraction::lookup_mode(&state, &input.chat_id, &token).await?;
     let now = chrono::Utc::now().timestamp();
     let start = now - input.days * 86400;
-    let id:Uuid=sqlx::query_scalar("INSERT INTO communication_sources(id,owner,chat_id,label,start_at,watermark,day_timezone) VALUES($1,'admin',$2,$3,$4,$4,'Asia/Shanghai') ON CONFLICT(owner,chat_id) DO UPDATE SET label=excluded.label RETURNING id")
-        .bind(Uuid::new_v4()).bind(&input.chat_id).bind(input.label.trim()).bind(start).fetch_one(&state.pool).await?;
+    let id: Uuid = sqlx::query_scalar(include_str!("../sql/communication_subscribe.sql"))
+        .bind(Uuid::new_v4())
+        .bind(&input.chat_id)
+        .bind(input.label.trim())
+        .bind(start)
+        .fetch_one(&state.pool)
+        .await?;
     sqlx::query("UPDATE communication_sources SET chat_mode=$2 WHERE id=$1")
         .bind(id)
         .bind(mode)
@@ -190,7 +209,7 @@ async fn update(
     configured(&state)?;
     let _guard = state.communications.lock().await;
     let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM communication_sources WHERE id=$1 AND version=$2)",
+        "SELECT EXISTS(SELECT 1 FROM communication_sources WHERE id=$1 AND version=$2 AND subscribed)",
     )
     .bind(id)
     .bind(input.version)
@@ -231,6 +250,11 @@ async fn forget(state: &AppState, id: Uuid) -> ApiResult<()> {
         .bind(id)
         .execute(&state.pool)
         .await?;
+    erase_files(state, id).await
+}
+
+/// 调用方已经停止采集并使依赖失效，文件清理失败时保留来源以供重试。
+pub(super) async fn erase_files(state: &AppState, id: Uuid) -> ApiResult<()> {
     let ids: Vec<Uuid> =
         sqlx::query_scalar("SELECT id FROM communication_documents WHERE source_id=$1")
             .bind(id)

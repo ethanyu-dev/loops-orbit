@@ -5,10 +5,12 @@ pub(crate) mod dependencies;
 mod extraction;
 mod history;
 mod images;
+mod library;
 mod members;
 mod mentions;
 mod oauth;
 pub mod progress;
+mod removal;
 pub mod routes;
 pub(crate) mod search;
 pub(crate) mod store;
@@ -66,6 +68,8 @@ pub struct Source {
     pub label: String,
     /// 日文件使用的时区，旧 UTC 文件由后台迁移。
     pub day_timezone: String,
+    /// 已移除的订阅保留文件元数据，重新添加后才恢复采集。
+    pub subscribed: bool,
     /// 暂停后不采集、不召回、不支持旧跟进。
     pub enabled: bool,
     /// 变更围栏，用于丢弃在途采集结果。
@@ -90,7 +94,7 @@ pub struct Source {
     /// 脱敏故障分类。
     pub error: Option<String>,
 }
-pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,day_timezone,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
+pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,day_timezone,subscribed,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
 
 /// 当前文件指针；正文读取时仍要校验哈希。
 #[derive(Clone, Serialize, sqlx::FromRow)]

@@ -2,6 +2,7 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
+  invalid_communication_library: '请检查目录日期或搜索词，关键词最多 2,000 字。',
   communication_disabled: '服务端尚未启用飞书沟通采集。',
   communication_not_connected: '请先连接你的飞书账号。',
   communication_reauthorize: '飞书授权已失效，请重新连接。',

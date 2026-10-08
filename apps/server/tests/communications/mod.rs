@@ -1,6 +1,8 @@
 mod deployment_tests;
 mod extraction_tests;
+mod library_tests;
 mod progress_tests;
+mod removal_tests;
 mod subscription_tests;
 use super::*;
 use axum::{

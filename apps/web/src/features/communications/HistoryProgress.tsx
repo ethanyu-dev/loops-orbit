@@ -1,18 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api, errorText } from '../../api';
 import type { Snapshot } from './types';
+import { Link } from 'react-router-dom';
+import { RefreshCw } from 'lucide-react';
+import { HistoryTasks } from './HistoryTasks';
 
 // 轻量元数据每五秒读取一次，上一请求结束后再排下一轮，避免慢网络叠加请求。
+// 单次读取超时后保留旧快照并重试，避免网络挂起冻结整个进度区。
+const REQUEST_TIMEOUT = 20000;
 const POLL_INTERVAL = 5000;
-const STATES: Record<string, string> = {
-  pending: '等待拉取',
-  running: '正在分页拉取',
-  complete: '本轮消息已拉取',
-  failed: '拉取失败，等待重试',
-  cancelled: '已取消历史采集',
-};
 /** 全量任务统计与有限的活动列表；分页数是累计工作量，不等于唯一消息数。 */
-interface Progress {
+export interface Progress {
   /** 全部历史范围任务的统计，不限于当前活动列表。 */
   counts: {
     /** 任务总数，包括暂停来源。 */
@@ -68,41 +66,24 @@ function time(value: string) {
 export function HistoryProgress({
   revision,
   documents,
+  onRefresh,
 }: {
   revision: number;
   documents: Snapshot['progress'];
+  /** 手动刷新时同时更新工作空间资料统计。 */
+  onRefresh: () => Promise<void>;
 }) {
   const [data, setData] = useState<Progress | null>(null);
   const [error, setError] = useState('');
   const [updated, setUpdated] = useState('');
   const [retry, setRetry] = useState(0);
-  const [cancelling, setCancelling] = useState(false);
-  const [notice, setNotice] = useState('');
-  /** 取消停止历史拉取和复查，不删除已有资料，也不暂停新消息。 */
-  async function cancel(id?: string) {
-    setCancelling(true);
-    try {
-      const result = await api<{ count: number }>('/communications/history/cancel', {
-        method: 'POST',
-        body: JSON.stringify(id ? { scope: 'job', id } : { scope: 'all' }),
-      });
-      setNotice(
-        `已取消 ${result.count} 个历史任务。已导入资料保留并继续整理，新消息订阅不受影响。`,
-      );
-      setRetry((value) => value + 1);
-    } catch (reason) {
-      setNotice(errorText(reason));
-    } finally {
-      setCancelling(false);
-    }
-  }
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
         const value = await api<Progress>('/communications/history/progress', {
-          signal: controller.signal,
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(REQUEST_TIMEOUT)]),
         });
         if (!controller.signal.aborted) {
           setData(value);
@@ -151,147 +132,124 @@ export function HistoryProgress({
     <section
       id="history-progress"
       tabIndex={-1}
-      className="settings-card communication-card history-progress"
+      className="sync-progress"
       aria-labelledby="history-progress-title"
     >
-      <div className="communication-row">
-        <h2 id="history-progress-title">历史整理进度</h2>
-        <div className="source-actions">
-          <button onClick={() => setRetry((value) => value + 1)}>刷新进度</button>
-          <button
-            disabled={cancelling || !counts || counts.total === counts.cancelled}
-            onClick={() => void cancel()}
-          >
-            {cancelling ? '取消中…' : '取消全部历史任务'}
-          </button>
+      <div className="sync-heading">
+        <div>
+          <h2 id="history-progress-title">处理进度</h2>
+          <p>{updated ? `任务每 5 秒自动更新 · 最近读取 ${time(updated)}` : '正在读取任务状态…'}</p>
         </div>
+        <button
+          className="sync-button"
+          onClick={() => {
+            setRetry((value) => value + 1);
+            void onRefresh();
+          }}
+        >
+          <RefreshCw size={14} />
+          刷新
+        </button>
       </div>
-      {notice && <p role="status">{notice}</p>}
-      <p>
-        取消会停止历史拉取和每日复查；已导入资料保留并继续整理，新消息订阅不受影响。再次提交相同范围可重新开始。
-      </p>
       {error && (
-        <p role="alert">
-          进度暂未更新：{error} {data ? '以下保留上次结果。' : ''}
+        <p className="sync-alert" role="alert">
+          进度暂未更新：{error} {data ? '以下保留上次结果。' : '正在重试。'}
         </p>
       )}
-      {!data ? (
-        <p role="status">{error ? '等待重新读取进度。' : '正在读取历史任务…'}</p>
-      ) : (
-        counts && (
-          <>
-            {!data.connected && (
-              <p role="alert">飞书连接当前不可用，任务会保留；请重新授权后继续。</p>
-            )}
-            {!counts.total ? (
-              <p>尚未提交历史任务。在下方选择会话和日期开始导入。</p>
-            ) : (
-              <>
-                <p>
-                  <strong>
-                    {active > 0
-                      ? `本轮拉取完成 ${counts.complete} / ${active} 个启用任务`
-                      : '当前没有启用的历史任务'}
-                  </strong>{' '}
-                  · 共 {counts.total} 个任务（包含暂停与取消）
-                </p>
-                {active > 0 && (
-                  <progress
-                    aria-label="历史任务本轮拉取完成比例"
-                    value={counts.complete}
-                    max={active}
-                  />
-                )}
-                <div className="history-progress-counts">
-                  <span>
-                    等待拉取 <strong>{counts.pending}</strong>
-                  </span>
-                  <span>
-                    正在拉取 <strong>{counts.running}</strong>
-                  </span>
-                  <span className={counts.failed ? 'error-text' : ''}>
-                    失败重试 <strong>{counts.failed}</strong>
-                  </span>
-                  <span>
-                    已暂停 <strong>{counts.paused}</strong>
-                  </span>
-                  <span>
-                    已取消 <strong>{counts.cancelled}</strong>
-                  </span>
-                </div>
-                <p>
-                  累计成功处理 {counts.pages_processed} 页（含重放与复查）；
-                  {counts.last_progress_at
-                    ? `最近推进：${time(counts.last_progress_at)}`
-                    : '等待新的分页完成记录'}
-                  。分页计数从本次功能上线起记录。
-                </p>
-              </>
-            )}
-            <div className="history-processing-summary">
-              <h3>资料处理 · 整个工作空间</h3>
-              <p>
-                已保存 {totals.total} 份日资料，文字资料可用 {totals.ready} 份；待整理{' '}
-                {totals.summarizing} 份，待索引 {totals.indexing} 份，失败重试 {totals.errors} 份。
-              </p>
-              <p>
-                图片解读 {totals.images_ready} / {totals.images} 张
-                {totals.images_failed ? `，${totals.images_failed} 张失败重试中` : ''}。
-              </p>
-              <p>
-                处理统计由后台分批核对，可能稍有延迟。
-                {totals.checking > 0 &&
-                  `另有 ${totals.checking} 份资料统计更新中；图片计数待核对后补齐。`}
-                拉取完成后仍需整理与索引。这里包含新消息与历史消息，同一天同一会话合并为一份资料。
-              </p>
-            </div>
-            {data.jobs.length > 0 && (
-              <details className="history-jobs">
-                <summary>查看任务详情 · 优先显示失败与进行中的任务</summary>
-                <p>
-                  最多显示 20
-                  个任务；上方统计包含全部任务。已完成的范围每日复查，因此本轮状态会变化。
-                </p>
-                {data.jobs.map((job) => (
-                  <article className="communication-evidence" key={job.id}>
-                    <strong>{job.label}</strong>
-                    <p>
-                      {job.status === 'cancelled'
-                        ? STATES.cancelled
-                        : job.enabled
-                          ? STATES[job.status]
-                          : '已暂停'}{' '}
-                      ·{' '}
-                      {new Date(job.start_at * 1000).toLocaleDateString('zh-CN', {
-                        timeZone: 'Asia/Shanghai',
-                      })}
-                      —
-                      {new Date((job.end_at - 1) * 1000).toLocaleDateString('zh-CN', {
-                        timeZone: 'Asia/Shanghai',
-                      })}{' '}
-                      · 累计 {job.pages_processed} 页
-                    </p>
-                    {job.status !== 'cancelled' && (
-                      <button disabled={cancelling} onClick={() => void cancel(job.id)}>
-                        取消此历史任务
-                      </button>
-                    )}
-                    {job.error && job.enabled && (
-                      <p className="error-text">
-                        {job.error === 'communication_provider_rejected'
-                          ? '飞书拒绝读取，请检查授权和消息权限。'
-                          : '暂时拉取失败，后台会自动重试。'}{' '}
-                        下次尝试：{time(job.next_attempt)}
-                      </p>
-                    )}
-                  </article>
-                ))}
-              </details>
-            )}
-          </>
-        )
+      {data && !data.connected && (
+        <p className="sync-alert" role="alert">
+          飞书连接不可用，任务已保留，请重新授权后继续。
+        </p>
       )}
-      {updated && <small>每 5 秒自动刷新任务 · 最近读取 {time(updated)}（北京时间）</small>}
+      <div className="sync-overview">
+        <article>
+          <div className="sync-stage-title">
+            <span>01</span>
+            <h3>拉取消息</h3>
+            <small>历史任务</small>
+          </div>
+          <div className="sync-metric">
+            <strong>{counts ? counts.complete : '—'}</strong>
+            <span>/ {counts ? active : '—'} 个启用任务完成本轮拉取</span>
+          </div>
+          <progress
+            aria-label="历史任务本轮拉取完成比例"
+            value={counts?.complete ?? 0}
+            max={Math.max(active, 1)}
+          />
+          <div className="sync-counts">
+            <span>
+              等待 <b>{counts?.pending ?? '—'}</b>
+            </span>
+            <span>
+              进行中 <b>{counts?.running ?? '—'}</b>
+            </span>
+            <span className={counts?.failed ? 'error-text' : ''}>
+              失败重试 <b>{counts?.failed ?? '—'}</b>
+            </span>
+          </div>
+          <p className="sync-note">
+            已暂停 {counts?.paused ?? '—'} · 已取消 {counts?.cancelled ?? '—'} · 累计{' '}
+            {counts?.pages_processed ?? '—'} 页
+          </p>
+        </article>
+        <article>
+          <div className="sync-stage-title">
+            <span>02</span>
+            <h3>整理资料</h3>
+            <small>整个工作空间</small>
+          </div>
+          <div className="sync-metric">
+            <strong>{totals.ready}</strong>
+            <span>/ {totals.total} 份日资料可用</span>
+          </div>
+          <progress
+            aria-label="工作空间文字资料可用比例"
+            value={totals.ready}
+            max={Math.max(totals.total, 1)}
+          />
+          <div className="sync-counts">
+            <span>
+              待整理 <b>{totals.summarizing}</b>
+            </span>
+            <span>
+              待索引 <b>{totals.indexing}</b>
+            </span>
+            <span className={totals.errors ? 'error-text' : ''}>
+              失败重试 <b>{totals.errors}</b>
+            </span>
+          </div>
+          <p className="sync-note">
+            图片已解读 {totals.images_ready} / {totals.images} 张
+            {totals.images_failed > 0 && ` · ${totals.images_failed} 张失败`}
+            {totals.checking > 0 && ` · ${totals.checking} 份统计更新中`}
+          </p>
+        </article>
+      </div>
+      {(totals.errors > 0 || totals.images_failed > 0) && (
+        <div className="sync-alert">
+          {totals.errors > 0 ? `${totals.errors} 份资料处理失败` : '部分图片解读失败'}
+          ，后台会自动重试。<Link to="/communications/records">查看沟通资料 →</Link>
+        </div>
+      )}
+      <details className="sync-explanation">
+        <summary>进度如何计算</summary>
+        <p>
+          拉取完成后仍需整理与索引。资料统计包含新消息和历史消息，同一天同一会话合并为一份资料，后台分批核对，可能稍有延迟。
+        </p>
+        <p>
+          已完成的历史范围每日复查，本轮进度可能变化。累计页数包含重放与复查，不代表唯一消息数。
+          {counts?.last_progress_at &&
+            ` 最近成功拉取：${time(counts.last_progress_at)}（北京时间）。`}
+        </p>
+      </details>
+      {data ? (
+        <HistoryTasks data={data} onChanged={() => setRetry((value) => value + 1)} />
+      ) : (
+        <p className="sync-empty" role="status">
+          {error ? '暂时无法读取任务，页面会自动重试。' : '正在读取历史任务…'}
+        </p>
+      )}
     </section>
   );
 }

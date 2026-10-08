@@ -1,0 +1,436 @@
+/* 日期目录和文件列表组成独立的资料浏览器，继承工作空间主题。 */
+.document-library {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.library-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 5px 7px 5px 12px;
+}
+.library-search:focus-within {
+  border-color: var(--border);
+}
+.library-search > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.library-search input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  font-size: 13px;
+  padding: 7px 0;
+}
+.library-search input:focus-visible {
+  outline: none;
+}
+.library-search select {
+  min-width: 0;
+  background: transparent;
+  color: var(--secondary);
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.library-search-submit {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.library-search-submit:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--secondary);
+}
+.library-refresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px;
+  border-radius: 6px;
+}
+.library-refresh:hover {
+  background: var(--panel);
+}
+.library-layout {
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
+  min-height: 430px;
+}
+.library-tree {
+  background: var(--sidebar);
+  border-right: 1px solid var(--line);
+  padding: 18px 10px;
+  max-height: 680px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.library-tree-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 9px 18px;
+  font-size: 12px;
+  color: var(--secondary);
+}
+.library-tree-title > span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.library-tree button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  border-radius: 6px;
+  padding: 9px;
+  color: var(--secondary);
+  font-size: 12px;
+}
+.library-tree button:hover {
+  background: var(--raised);
+}
+.library-tree button.selected {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 550;
+}
+.library-root {
+  margin-bottom: 12px;
+}
+.library-month {
+  margin-bottom: 4px;
+}
+.library-month-button {
+  font-weight: 500;
+}
+.library-tree svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.library-days {
+  border-left: 1px solid var(--line);
+  margin: 4px 0 10px 16px;
+  padding-left: 9px;
+}
+.library-days button {
+  margin: 2px 0;
+}
+.library-days small {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.library-tree-note,
+.library-tree-error {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px;
+  line-height: 1.7;
+}
+.library-tree .library-load-more {
+  justify-content: center;
+  color: var(--muted);
+  margin-top: 12px;
+  border: 1px solid var(--line);
+}
+.library-content {
+  min-width: 0;
+  padding: 22px 24px;
+}
+.library-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+.library-breadcrumb button {
+  font-size: inherit;
+  color: inherit;
+  padding: 0;
+}
+.library-breadcrumb button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.library-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.library-heading h2 {
+  font-size: 19px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.library-heading > span {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.library-description {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 8px 0 24px;
+}
+.library-column-labels,
+.library-file {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 85px 16px;
+  align-items: center;
+  gap: 16px;
+}
+.library-column-labels {
+  color: var(--muted);
+  font-size: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.library-file {
+  text-decoration: none;
+  color: var(--text);
+  padding: 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.library-file:hover {
+  background: var(--panel);
+}
+.library-file:last-child {
+  border-bottom: 0;
+}
+.library-file-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.library-file-icon {
+  width: 38px;
+  height: 43px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--secondary);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.library-file-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.library-file-copy strong {
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.library-file-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.library-file-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.library-file-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.library-file-status.ready {
+  color: var(--green);
+}
+.library-file-status.error {
+  color: var(--danger);
+}
+.library-file-arrow {
+  color: var(--muted);
+}
+.library-file-group + .library-file-group {
+  margin-top: 24px;
+}
+.library-file-date {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 5px 0 12px;
+}
+.library-excerpt {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.library-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 235px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.library-empty h3 {
+  font-size: 15px;
+  color: var(--secondary);
+  font-weight: 500;
+}
+.library-empty p {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.library-empty button,
+.library-empty a {
+  font-size: 12px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-decoration: none;
+}
+.library-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 18px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.library-pagination button {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+@media (max-width: 1050px) {
+  .library-layout {
+    grid-template-columns: 185px minmax(0, 1fr);
+  }
+  .library-content {
+    padding: 20px 16px;
+  }
+  .library-column-labels,
+  .library-file {
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) 70px 12px;
+  }
+}
+/* 移动端目录置于文件列表上方，限制目录高度，仍可直接翻到较早日期。 */
+@media (max-width: 760px) {
+  .library-toolbar {
+    padding: 12px;
+    gap: 5px;
+  }
+  .library-search {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .library-search input {
+    flex-basis: calc(100% - 66px);
+    font-size: 16px;
+  }
+  .library-search select {
+    margin-left: auto;
+    border-left: 0;
+  }
+  .library-refresh {
+    padding: 6px;
+  }
+  .library-refresh span {
+    display: none;
+  }
+  .library-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .library-tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: 240px;
+    padding: 14px 12px;
+  }
+  .library-tree-title {
+    padding-bottom: 10px;
+  }
+  .library-content {
+    padding: 20px 12px;
+  }
+  .library-heading {
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .library-heading h2 {
+    font-size: 17px;
+  }
+  .library-column-labels {
+    display: none;
+  }
+  .library-file {
+    grid-template-columns: minmax(0, 1fr) 14px;
+    padding: 14px 6px;
+    gap: 7px 10px;
+  }
+  .library-file-status {
+    grid-column: 1;
+    padding-left: 50px;
+  }
+  .library-file-arrow {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .library-file-copy small {
+    font-size: 10px;
+  }
+  .library-description {
+    margin-bottom: 14px;
+  }
+}

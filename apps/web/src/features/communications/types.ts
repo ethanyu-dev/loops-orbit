@@ -6,6 +6,8 @@ export interface Source {
   chat_id: string;
   /** 用户选择时的名称。 */
   label: string;
+  /** 移除订阅后可继续保留日文件；旧快照缺失时按已订阅处理。 */
+  subscribed?: boolean;
   /** 同时控制采集与检索。 */
   enabled: boolean;
   /** 防止旧页面覆盖新状态。 */
@@ -88,6 +90,8 @@ export interface Detail {
 }
 /** 只包含可显示状态，任何令牌均不返回前端。 */
 export interface Snapshot {
+  /** 全部订阅的版本摘要，用于绑定批量移除弹窗的范围。 */
+  subscription_revision?: string;
   /** 服务端是否启用采集。 */
   enabled: boolean;
   /** 已授权账号，不等于所有管理员可见的机器人用户。 */
