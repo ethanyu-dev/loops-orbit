@@ -176,6 +176,18 @@ export function SourceManager({
           </button>
         </div>
       </div>
+      {data.connection?.auto_subscribe_private && (
+        <p className="subscription-archive-note">
+          私聊自动订阅 · 群聊手动添加。已暂停或移除的私聊不会被自动恢复，新发现的私聊仍会加入。
+          {data.connection.discovery_error && (
+            <span role="status">
+              {data.connection.discovery_error === 'communication_discovery_limit'
+                ? '本轮发现达到扫描上限，将稍后重新扫描；遗漏会话可手动添加。'
+                : '私聊自动发现暂时失败，后台会重试，也可手动添加。'}
+            </span>
+          )}
+        </p>
+      )}
       {adding && (
         <div className="subscription-picker">
           <SourcePicker sources={data.sources} report={report} onAdded={reload} />

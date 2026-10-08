@@ -84,7 +84,9 @@ export function RemoveSubscriptionDialog({
           : `会话：${target.label}`}
       </p>
       {!target.deleteOnly && (
-        <p>停止后续同步、历史导入和相关提醒。飞书账号保持连接，可随时重新订阅。</p>
+        <p>
+          停止后续同步、历史导入和相关提醒。飞书账号保持连接，可随时重新订阅。已移除私聊不会被自动加回，未来新发现的私聊仍会自动加入。
+        </p>
       )}
       <label className="subscription-delete-option">
         <input

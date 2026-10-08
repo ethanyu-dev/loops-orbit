@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { ArrowLeft, Bell, RefreshCw } from 'lucide-react';
 import { API_ORIGIN } from '../../config';
 import { api, errorText } from '../../api';
+import { useSearchParams } from 'react-router-dom';
+import { processingError } from './processingError';
 import type { Detail, Item } from './types';
 
 // 分类展示不暗示机器摘要已被用户确认。
@@ -22,6 +24,8 @@ export function DocumentView({
   report: (e: unknown) => void;
   onClose: () => void;
 }) {
+  const [params, setParams] = useSearchParams();
+  const imageErrors = params.get('image_errors') === 'true';
   const [loadError, setLoadError] = useState('');
   const [revision, setRevision] = useState(0);
   const [detail, setDetail] = useState<Detail | null>(null);
@@ -39,9 +43,12 @@ export function DocumentView({
     setDetail(null);
     setLoadError('');
     setItem(null);
-    void api<Detail>(`/communications/documents/${id}?offset=${offset}`, {
-      signal: controller.signal,
-    })
+    void api<Detail>(
+      `/communications/documents/${id}?offset=${offset}&image_errors=${imageErrors}`,
+      {
+        signal: controller.signal,
+      },
+    )
       .then((value) => {
         if (!controller.signal.aborted) setDetail(value);
       })
@@ -49,7 +56,7 @@ export function DocumentView({
         if (!controller.signal.aborted) setLoadError(errorText(error));
       });
     return () => controller.abort();
-  }, [id, offset, revision]);
+  }, [id, offset, revision, imageErrors]);
   /** 归纳文本可修正；选择另一个条目后更换幂等键。 */
   function select(value: Item, index: number) {
     setItem(index);
@@ -93,7 +100,9 @@ export function DocumentView({
             <h1>{detail?.source_label || '沟通资料'}</h1>
             <p className="document-meta">
               {detail?.document.day || '正在读取'}
-              {detail && !detail.processing ? ` · ${detail.total} 条相关消息` : ''}
+              {detail && !detail.processing
+                ? ` · ${detail.total} 条${imageErrors ? '含失败图片的' : '相关'}消息`
+                : ''}
             </p>
           </div>
           <button className="document-refresh" onClick={() => setRevision((value) => value + 1)}>
@@ -116,43 +125,49 @@ export function DocumentView({
           </p>
         ) : (
           <>
-            <section className="document-section" aria-labelledby="document-summary-title">
-              <div className="document-section-heading">
-                <h2 id="document-summary-title">整理结果</h2>
-                <span>AI 归纳 · 请核对原话</span>
-              </div>
-              {!detail.summary && (
-                <p className="document-empty">正在整理消息，原始内容可在下方查看。</p>
-              )}
-              {detail.summary?.items.length === 0 && (
-                <p className="document-empty">暂未发现明确的决定、承诺或待确认事项。</p>
-              )}
-              {detail.summary?.items.map((value, index) => (
-                <article className="summary-item" key={`${value.message_id}-${index}`}>
-                  <span className="summary-kind">{LABELS[value.kind] || value.kind}</span>
-                  <p className="summary-text">{value.text}</p>
-                  <details className="summary-evidence">
-                    <summary>查看引用原话</summary>
-                    <blockquote>{value.quote}</blockquote>
-                  </details>
-                  <div className="summary-footer">
-                    <span>
-                      {value.sender_name || (value.is_me ? '我' : '成员（姓名未获取）')} ·{' '}
-                      {new Date(value.create_time).toLocaleTimeString('zh-CN', {
-                        timeZone: 'Asia/Shanghai',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      })}
-                    </span>
-                    <button onClick={() => select(value, index)}>
-                      <Bell size={14} />
-                      设为提醒
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </section>
+            {!imageErrors && (
+              <section className="document-section" aria-labelledby="document-summary-title">
+                <div className="document-section-heading">
+                  <h2 id="document-summary-title">整理结果</h2>
+                  <span>AI 归纳 · 请核对原话</span>
+                </div>
+                {!detail.summary && (
+                  <p className="document-empty">
+                    {detail.document.summary_error
+                      ? `整理失败：${processingError(detail.document.summary_error)}（${detail.document.summary_error}）`
+                      : '正在整理消息，原始内容可在下方查看。'}
+                  </p>
+                )}
+                {detail.summary?.items.length === 0 && (
+                  <p className="document-empty">暂未发现明确的决定、承诺或待确认事项。</p>
+                )}
+                {detail.summary?.items.map((value, index) => (
+                  <article className="summary-item" key={`${value.message_id}-${index}`}>
+                    <span className="summary-kind">{LABELS[value.kind] || value.kind}</span>
+                    <p className="summary-text">{value.text}</p>
+                    <details className="summary-evidence">
+                      <summary>查看引用原话</summary>
+                      <blockquote>{value.quote}</blockquote>
+                    </details>
+                    <div className="summary-footer">
+                      <span>
+                        {value.sender_name || (value.is_me ? '我' : '成员（姓名未获取）')} ·{' '}
+                        {new Date(value.create_time).toLocaleTimeString('zh-CN', {
+                          timeZone: 'Asia/Shanghai',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: false,
+                        })}
+                      </span>
+                      <button onClick={() => select(value, index)}>
+                        <Bell size={14} />
+                        设为提醒
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            )}
             {item !== null && (
               <form className="document-reminder-form" onSubmit={(event) => void create(event)}>
                 <h3>确认跟进事项</h3>
@@ -203,15 +218,37 @@ export function DocumentView({
             )}
             <section className="document-section" aria-labelledby="document-messages-title">
               <div className="document-section-heading">
-                <h2 id="document-messages-title">原始消息</h2>
+                <h2 id="document-messages-title">
+                  {imageErrors ? '图片解读失败的消息' : '原始消息'}
+                </h2>
                 <span>{detail.total} 条 · 北京时间</span>
               </div>
+              <label className="document-error-toggle">
+                <input
+                  type="checkbox"
+                  checked={imageErrors}
+                  onChange={(event) => {
+                    const next = new URLSearchParams(params);
+                    if (event.target.checked) next.set('image_errors', 'true');
+                    else next.delete('image_errors');
+                    setOffset(0);
+                    setParams(next, { replace: true });
+                  }}
+                />
+                只看图片解读失败的消息
+              </label>
               {detail.summary && detail.summary.unsupported_count > 0 && (
                 <p className="document-note">
                   {detail.summary.unsupported_count} 条消息未参与文字摘要，图片解读单独展示。
                 </p>
               )}
-              {detail.total === 0 && <p>这一天没有符合个人关联规则的消息。</p>}
+              {detail.total === 0 && (
+                <p>
+                  {imageErrors
+                    ? '当前没有解读失败的图片，可能已自动重试成功。'
+                    : '这一天没有符合个人关联规则的消息。'}
+                </p>
+              )}
               {detail.messages.map((message) => (
                 <article key={message.message_id} className="document-message">
                   <div className="document-message-meta">
@@ -251,7 +288,7 @@ export function DocumentView({
                           : image.reference_only
                             ? '仅保存原图入口；单条消息自动解读前 20 张图片。'
                             : image.error
-                              ? '图片暂时无法解读，将自动重试；可尝试查看原图。'
+                              ? `图片解读失败：${processingError(image.error)}（${image.error}）。可查看原图核对。`
                               : '图片待解读，原图入口已保存。'}
                       </p>
                     </div>

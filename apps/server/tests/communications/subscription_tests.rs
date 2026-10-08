@@ -1,6 +1,6 @@
 use super::*;
 
-// 验证默认不订阅、加载候选无副作用、显式订阅幂等；不验证真实飞书租户。
+// 验证旧版全量自动订阅保持关闭、加载候选无副作用、显式订阅幂等；不验证真实飞书租户。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn manual_subscription_is_explicit() {
@@ -35,7 +35,7 @@ async fn manual_subscription_is_explicit() {
     h.close().await;
 }
 
-/// 测试夹具显式选择来源，不能依靠授权时自动订阅。
+/// 测试夹具显式选择来源，不依赖后台私聊发现的执行时机。
 async fn subscribe_fixture(h: &Harness, cookie: &str) {
     assert_eq!(
         h.request(

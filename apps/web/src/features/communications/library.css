@@ -434,3 +434,37 @@
     margin-bottom: 14px;
   }
 }
+/* 从进度进入时保留失败筛选，并允许回到全量目录。 */
+.library-failure-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 0 20px 16px;
+  font-size: 12px;
+}
+.library-failure-filter select {
+  padding: 6px 8px;
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+.library-failure-filter > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.communication-card .document-error-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.communication-card .document-error-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}

@@ -35,6 +35,10 @@ export interface Document {
   summary_hash: string | null;
   /** 摘要故障分类。 */
   summary_error: string | null;
+  /** 当前版本的失败图片数，由后台核对快照提供。 */
+  images_failed?: number;
+  /** 当前后台快照报告的资料处理失败。 */
+  processing_failed?: boolean;
 }
 /** 每个归纳都可核对原话，承诺归属由服务端检查。 */
 export interface Item {
@@ -100,6 +104,8 @@ export interface Snapshot {
     open_id: string;
     status: string;
     auto_subscribe: boolean;
+    /** 私聊独立自动发现，群聊仍需手动选择；旧服务缺失时不宣称启用。 */
+    auto_subscribe_private?: boolean;
     subscription_since: number;
     discovery_error: string | null;
   } | null;

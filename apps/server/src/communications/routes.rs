@@ -12,7 +12,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -42,11 +42,29 @@ pub fn router() -> Router<AppState> {
         .route("/documents/{id}", get(document))
         .route("/search", get(find))
 }
+/// 连接快照只包含可显示的身份和订阅策略，凭证及扫描游标不出服务端。
+#[derive(sqlx::FromRow, Serialize)]
+struct ConnectionSnapshot {
+    /// 授权账号身份。
+    open_id: String,
+    /// 飞书显示名称。
+    name: String,
+    /// 连接可用状态。
+    status: String,
+    /// 兼容旧字段，群聊全量自动订阅始终关闭。
+    auto_subscribe: bool,
+    /// 原有授权时间边界。
+    subscription_since: i64,
+    /// 最近私聊发现失败的稳定分类。
+    discovery_error: Option<String>,
+    /// 私聊专用的自动订阅策略。
+    auto_subscribe_private: bool,
+}
 /// 不向浏览器返回 OAuth 令牌、过期刷新凭证或内部分页令牌。
 async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<Json<Value>> {
     identity.require_admin()?;
-    let connection: Option<(String, String, String, bool, i64, Option<String>)> = sqlx::query_as(
-        "SELECT open_id,name,status,auto_subscribe,subscription_since,discovery_error FROM communication_connections WHERE owner='admin'",
+    let connection: Option<ConnectionSnapshot> = sqlx::query_as(
+        "SELECT open_id,name,status,auto_subscribe,subscription_since,discovery_error,auto_subscribe_private FROM communication_connections WHERE owner='admin'",
     )
     .fetch_optional(&state.pool)
     .await?;
@@ -74,7 +92,7 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     subscriptions.sort_by_key(|source| source.id);
     let subscription_revision = super::removal::revision(&subscriptions);
     Ok(Json(
-        json!({"subscription_revision":subscription_revision,"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection.map(|(open_id,name,status,auto_subscribe,subscription_since,discovery_error)|json!({"open_id":open_id,"name":name,"status":status,"auto_subscribe":auto_subscribe,"subscription_since":subscription_since,"discovery_error":discovery_error})),"sources":sources,"documents":documents}),
+        json!({"subscription_revision":subscription_revision,"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection,"sources":sources,"documents":documents}),
     ))
 }
 /// 浏览器按页加载候选，读取列表不会创建订阅。
@@ -282,7 +300,13 @@ async fn remove(
     identity.require_admin()?;
     configured(&state)?;
     let _guard = state.communications.lock().await;
-    sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=$1 ON CONFLICT DO NOTHING").bind(id).execute(&state.pool).await?;
+    let mut tx = state.pool.begin().await?;
+    // 旧版单项删除接口也必须先提交排除记录，再释放连接锁进行文件清理。
+    sqlx::query("SELECT owner FROM communication_connections WHERE owner='admin' FOR UPDATE")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=$1 ON CONFLICT DO NOTHING").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
     forget(&state, id).await?;
     Ok(Json(json!({"ok":true})))
 }
@@ -311,6 +335,9 @@ struct Offset {
     /// 从零起的原文位置。
     #[serde(default)]
     offset: usize,
+    /// 先筛出失败图片所在消息再分页，避免失败项藏在原文后续页中。
+    #[serde(default)]
+    image_errors: bool,
 }
 async fn document(
     State(state): State<AppState>,
@@ -339,7 +366,16 @@ async fn document(
     }
     let raw = store::raw(&state, &doc)?;
     let image_notes = super::images::notes(&state, &doc).await?;
-    let messages: Vec<_>=raw.iter().skip(page.offset).take(50).map(|m| {
+    let filtered: Vec<_> = raw
+        .iter()
+        .filter(|message| {
+            !page.image_errors
+                || image_notes
+                    .iter()
+                    .any(|note| note.message_id == message.message_id && note.error.is_some())
+        })
+        .collect();
+    let messages: Vec<_>=filtered.iter().skip(page.offset).take(50).map(|m| {
         let mut value=serde_json::to_value(m).expect("消息可序列化");
         value["sender_name"]=json!(m.display_name());
         value["relation"]=m.payload["relation"].clone();
@@ -361,7 +397,7 @@ async fn document(
         v
     });
     Ok(Json(
-        json!({"source_label":source_label,"document":doc,"summary":summary,"total":raw.len(),"messages":messages}),
+        json!({"source_label":source_label,"document":doc,"summary":summary,"total":filtered.len(),"messages":messages}),
     ))
 }
 /// 查询正文限长，与聊天检索复用同一身份边界。

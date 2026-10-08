@@ -1,6 +1,7 @@
 mod deployment_tests;
 mod extraction_tests;
 mod library_tests;
+mod private_subscription_tests;
 mod progress_tests;
 mod removal_tests;
 mod subscription_tests;
@@ -40,6 +41,12 @@ struct Fixture {
     refreshes: usize,
     /// 将第一页改为图片消息，验证下载和多模态派生流程。
     image: bool,
+    /// 原图下载的 HTTP 状态，仅用于分类测试，不模拟实际租户权限。
+    image_status: StatusCode,
+    /// 仅私聊自动发现请求使用的分页夹具，其他手动查找保持原行为。
+    private_pages: Vec<Value>,
+    /// 捕获发现响应后暂停，验证移除及重连围栏。
+    private_gate: Option<Arc<MessageGate>>,
     /// 同一天跨两页返回 60 条，用于证明不存在每日五条限制。
     bulk: bool,
     /// 群聊夹具用于核对个人关联范围。
@@ -66,6 +73,9 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         forged: false,
         refreshes: 0,
         image: false,
+        image_status: StatusCode::OK,
+        private_pages: vec![],
+        private_gate: None,
         bulk: false,
         group: false,
         mention_me: false,
@@ -84,15 +94,27 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         if body["grant_type"]=="refresh_token" {fixture.lock().unwrap().refreshes+=1;}
         Json(json!({"code":0,"access_token":"fixture-user-access","refresh_token":"fixture-user-refresh","expires_in":7200,"refresh_token_expires_in":86400}))
     })).route("/authen/v1/user_info",get(||async {Json(json!({"code":0,"data":{"open_id":"ou_allowed","name":"本地测试账号"}}))}))
-    .route("/im/v1/chats",get(|State(fixture):State<Arc<Mutex<Fixture>>>|async move {Json(json!({"code":0,"data":{"items":[{"chat_id":"oc_fixture","name":"测试沟通","chat_mode":if fixture.lock().unwrap().group {"group"}else{"p2p"}}],"has_more":false,"page_token":""}}))}))
+    .route("/im/v1/chats",get(|State(fixture):State<Arc<Mutex<Fixture>>>,Query(query):Query<HashMap<String,String>>|async move {
+        let (data, gate) = {
+            let f = fixture.lock().unwrap();
+            if query.get("types").is_some_and(|types| types == "p2p") && !f.private_pages.is_empty() {
+                let page = query.get("page_token").and_then(|value| value.strip_prefix("page-")).and_then(|value| value.parse::<usize>().ok()).unwrap_or(0);
+                (f.private_pages[page.min(f.private_pages.len()-1)].clone(), f.private_gate.clone())
+            } else {
+                (json!({"code":0,"data":{"items":[{"chat_id":"oc_fixture","name":"测试沟通","chat_mode":if f.group {"group"}else{"p2p"}}],"has_more":false,"page_token":""}}), None)
+            }
+        };
+        if let Some(gate) = gate { gate.arrived.notify_one(); gate.release.notified().await; }
+        Json(data)
+    }))
     .route("/im/v1/chats/oc_fixture/members",get(|Query(query):Query<HashMap<String,String>>|async move {
         if query.get("page_token").is_some_and(|s|s=="members_second") {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_other","name":"小林"}],"has_more":false}}))}
         else {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_unrelated","name":"其他成员"}],"has_more":true,"page_token":"members_second"}}))}
     }))
     .route("/im/v1/messages/om_me",get(single_message))
-    .route("/im/v1/messages/om_me/resources/img_fixture",get(|headers:HeaderMap|async move {
+    .route("/im/v1/messages/om_me/resources/img_fixture",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");
-        ([("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
+        (fixture.lock().unwrap().image_status,[("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
     }))
     .route("/im/v1/messages",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap,Query(query):Query<HashMap<String,String>>|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");

@@ -111,15 +111,34 @@ async fn download(
     .timeout(std::time::Duration::from_secs(20))
     .send()
     .await
-    .map_err(unavailable)?;
+    .map_err(|error| {
+        ApiError(
+            StatusCode::BAD_GATEWAY,
+            if error.is_timeout() {
+                "communication_image_download_timeout"
+            } else {
+                "communication_image_download_failed"
+            },
+        )
+    })?;
     if !response.status().is_success() {
         return Err(ApiError(
             StatusCode::BAD_GATEWAY,
-            "communication_image_unavailable",
+            match response.status().as_u16() {
+                401 | 403 => "communication_image_forbidden",
+                404 | 410 => "communication_image_not_found",
+                429 => "communication_image_rate_limited",
+                _ => "communication_image_unavailable",
+            },
         ));
     }
     let mut bytes = vec![];
-    while let Some(chunk) = response.chunk().await.map_err(unavailable)? {
+    while let Some(chunk) = response.chunk().await.map_err(|_| {
+        ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_image_download_failed",
+        )
+    })? {
         if bytes.len() + chunk.len() > MAX_IMAGE_BYTES {
             return Err(ApiError(
                 StatusCode::BAD_GATEWAY,
@@ -242,7 +261,7 @@ pub(super) async fn step(state: &AppState) -> ApiResult<()> {
                         .runtime
                         .describe_communication_image(&message.text, &data)
                         .await
-                        .map_err(unavailable)
+                        .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.code))
                 }
                 .await;
                 let _guard = state.communications.lock().await;

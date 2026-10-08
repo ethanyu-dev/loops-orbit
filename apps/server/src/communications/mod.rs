@@ -9,6 +9,7 @@ mod library;
 mod members;
 mod mentions;
 mod oauth;
+pub mod private_subscription;
 pub mod progress;
 mod removal;
 pub mod routes;
