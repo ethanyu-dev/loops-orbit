@@ -104,9 +104,7 @@ impl Runtime {
         host: Option<&dyn tools::Host>,
     ) -> Result<String, Failure> {
         let mut messages = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
-        if let Some(host) = host {
-            messages[0]["content"] = json!(format!("{SYSTEM_PROMPT}\n\n{}", host.instructions()));
-        }
+        let mut session = tools::Session::default();
         messages.extend(
             history
                 .iter()
@@ -117,6 +115,18 @@ impl Runtime {
             if let Some(progress) = progress {
                 progress.send_replace(String::new());
             }
+            let advertised = session.names().to_vec();
+            let instructions = host
+                .map(|host| host.instructions_for(&advertised))
+                .unwrap_or_default();
+            messages[0]["content"] = if self.config.tools_enabled {
+                json!(format!(
+                    "{SYSTEM_PROMPT}\n\n{}\n\n{instructions}",
+                    include_str!("../prompts/tool_discovery.md")
+                ))
+            } else {
+                json!(SYSTEM_PROMPT)
+            };
             let tools_available = self.config.tools_enabled && step + 1 < MAX_STEPS;
             if self.config.tools_enabled && !tools_available {
                 messages.push(
@@ -128,7 +138,7 @@ impl Runtime {
                     &messages,
                     progress,
                     tools_available,
-                    host.map(|h| h.definitions()).unwrap_or_default(),
+                    session.definitions(host),
                     CHAT_OUTPUT_TOKENS,
                 )
                 .await?;
@@ -141,8 +151,15 @@ impl Runtime {
                 if !tools_available {
                     return Err(failure("tool_step_limit", false));
                 }
-                self.append_tool_results(&mut messages, &answer, calls, step, host)
-                    .await?;
+                self.append_tool_results(
+                    &mut messages,
+                    &answer,
+                    calls,
+                    (step, &advertised),
+                    host,
+                    &mut session,
+                )
+                .await?;
                 continue;
             }
 
@@ -176,6 +193,12 @@ impl Runtime {
                     },
                 },
             }]);
+        }
+        if tools {
+            body["tools"].as_array_mut().expect("基础工具数组").extend(
+                serde_json::from_str::<Vec<Value>>(include_str!("../prompts/discovery_tools.json"))
+                    .expect("固定发现 schema"),
+            );
         }
         body
     }
@@ -361,8 +384,9 @@ impl Runtime {
         messages: &mut Vec<Value>,
         answer: &Value,
         calls: &[Value],
-        step: usize,
+        round: (usize, &[String]),
         host: Option<&dyn tools::Host>,
+        session: &mut tools::Session,
     ) -> Result<(), Failure> {
         if !self.config.tools_enabled || calls.len() > MAX_TOOL_CALLS {
             return Err(failure("invalid_tool_calls", false));
@@ -379,24 +403,32 @@ impl Runtime {
                 .ok_or(failure("invalid_tool_call_id", false))?;
             let name = call["function"]["name"].as_str().unwrap_or("");
             let args = call["function"]["arguments"].as_str().unwrap_or("");
-            let result = if let Some(host) = host.filter(|host| {
-                host.definitions()
-                    .iter()
-                    .any(|tool| tool["function"]["name"] == name)
-            }) {
+            let visible = tools::Session::visible(name, round.1);
+            let result = if !visible {
+                json!({"error":"tool_not_loaded"})
+            } else if matches!(name, "tools_search" | "tools_load") {
+                match serde_json::from_str(args) {
+                    Ok(args) => session.manage(host, name, args),
+                    Err(_) => json!({"error":"invalid_arguments"}),
+                }
+            } else if !session.business(name) {
+                json!({"error":"tool_business_budget_exhausted"})
+            } else if name == "current_time" {
+                execute_tool(name, args)
+            } else if let Some(host) = host {
                 match serde_json::from_str::<Value>(args) {
                     Ok(args) => host.execute(name, args).await,
                     Err(_) => json!({"error":"invalid_arguments"}),
                 }
             } else {
-                execute_tool(name, args)
+                json!({"error":"unknown_tool"})
             };
-            let known_tool = if name == "current_time" {
-                "current_time"
-            } else {
-                "unknown"
-            };
-            tracing::info!(step, tool = known_tool, "工具执行完成");
+            tracing::info!(
+                step = round.0,
+                tool = if visible { name } else { "unloaded" },
+                success = result.get("error").is_none(),
+                "工具执行完成"
+            );
             messages.push(json!({
                 "role": "tool",
                 "tool_call_id": id,

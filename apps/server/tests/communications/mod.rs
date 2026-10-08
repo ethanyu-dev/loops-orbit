@@ -445,7 +445,7 @@ async fn retrieval_is_scoped_and_used_as_external_evidence() {
             requests.iter().any(
                 |request| request["tools"].as_array().is_some_and(|tools| tools
                     .iter()
-                    .any(|tool| tool["function"]["name"] == "communication_read"))
+                    .any(|tool| tool["function"]["name"] == "tools_search"))
             )
         );
         assert!(

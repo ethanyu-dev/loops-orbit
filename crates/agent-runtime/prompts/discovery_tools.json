@@ -1,0 +1,61 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "tools_search",
+      "description": "发现当前身份可用的业务工具，只返回轻量描述；空查询可分页浏览目录。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "tools_load",
+      "description": "按名称加载业务工具，下一轮可调用；可释放不再需要的工具。加载不执行业务动作。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8
+          },
+          "unload": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+]
