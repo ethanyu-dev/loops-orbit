@@ -133,12 +133,13 @@ async fn generate(
         sqlx::query("UPDATE runs SET phase='responding' WHERE id=$1 AND lease_token=$2 AND status='running'")
             .bind(job.id).bind(job.lease_token).execute(&state.pool).await
             .map_err(|_| agent_runtime::Failure { code: "storage_unavailable", retryable: true })?;
-        let host = crate::followups::tools::Host::new(state, job)
-            .await
-            .map_err(|error| agent_runtime::Failure {
-                code: error.1,
-                retryable: true,
-            })?;
+        let host =
+            crate::tools::Host::new(state, job)
+                .await
+                .map_err(|error| agent_runtime::Failure {
+                    code: error.1,
+                    retryable: true,
+                })?;
         if let Some(background) =
             host.background()
                 .await

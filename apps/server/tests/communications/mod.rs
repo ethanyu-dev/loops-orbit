@@ -5,6 +5,7 @@ mod private_subscription_tests;
 mod progress_tests;
 mod removal_tests;
 mod subscription_tests;
+mod tool_tests;
 use super::*;
 use axum::{
     extract::{Query, State},
@@ -440,6 +441,13 @@ async fn retrieval_is_scoped_and_used_as_external_evidence() {
     memory::complete(&h, &cookie, conv, "材料怎么安排的？").await;
     {
         let requests = h.requests.lock().unwrap();
+        assert!(
+            requests.iter().any(
+                |request| request["tools"].as_array().is_some_and(|tools| tools
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == "communication_read"))
+            )
+        );
         assert!(
             requests
                 .iter()

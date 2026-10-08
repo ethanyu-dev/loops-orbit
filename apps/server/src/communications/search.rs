@@ -289,7 +289,7 @@ pub(crate) async fn context(
                 .unwrap_or_default()
         };
         let link = format!(
-            "{}/communications/records/{}",
+            "{}/communications?communication={}",
             state.config.public_url, hit.document.id
         );
         let notes = super::images::notes(state, &hit.document).await?;
@@ -304,5 +304,8 @@ pub(crate) async fn context(
         bytes += size;
         evidence.push(value);
     }
-    Ok(Some(format!("{CONTEXT_PROMPT}\n{}", json!(evidence))))
+    Ok(Some(format!(
+        "{CONTEXT_PROMPT}\n{}",
+        json!({"retrieval_kind":"relevance_candidates","is_exhaustive":false,"returned_documents":evidence.len(),"documents":evidence})
+    )))
 }
