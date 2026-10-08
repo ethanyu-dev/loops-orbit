@@ -40,6 +40,8 @@ struct Fixture {
     refreshes: usize,
     /// 将第一页改为图片消息，验证下载和多模态派生流程。
     image: bool,
+    /// 原图下载的 HTTP 状态，仅用于分类测试，不模拟实际租户权限。
+    image_status: StatusCode,
     /// 同一天跨两页返回 60 条，用于证明不存在每日五条限制。
     bulk: bool,
     /// 群聊夹具用于核对个人关联范围。
@@ -66,6 +68,7 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         forged: false,
         refreshes: 0,
         image: false,
+        image_status: StatusCode::OK,
         bulk: false,
         group: false,
         mention_me: false,
@@ -90,9 +93,9 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         else {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_unrelated","name":"其他成员"}],"has_more":true,"page_token":"members_second"}}))}
     }))
     .route("/im/v1/messages/om_me",get(single_message))
-    .route("/im/v1/messages/om_me/resources/img_fixture",get(|headers:HeaderMap|async move {
+    .route("/im/v1/messages/om_me/resources/img_fixture",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");
-        ([("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
+        (fixture.lock().unwrap().image_status,[("content-type","application/octet-stream")],vec![137u8,80,78,71,13,10,26,10])
     }))
     .route("/im/v1/messages",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap,Query(query):Query<HashMap<String,String>>|async move {
         assert_eq!(headers["authorization"],"Bearer fixture-user-access");

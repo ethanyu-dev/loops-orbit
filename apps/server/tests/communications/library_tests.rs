@@ -159,6 +159,7 @@ async fn library_rejects_unauthorized_and_invalid_queries() {
         "/api/communications/library/days?before=2026-02-30",
         "/api/communications/library/files?day=2026-2-01",
         "/api/communications/library/files?offset=-1",
+        "/api/communications/library/files?status=invalid",
     ] {
         assert_eq!(
             h.request("GET", path, Some(&cookie), Value::Null).await.0,
@@ -172,5 +173,132 @@ async fn library_rejects_unauthorized_and_invalid_queries() {
             .0,
         StatusCode::BAD_REQUEST
     );
+    h.close().await;
+}
+
+// 用真实数据库和本地图片夹具验证失败目录、跨原文分页定位及指纹失效；不调用真实飞书或判断图片语义。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn library_image_failures_link_to_filtered_messages() {
+    let (h, fixture, server) = setup().await;
+    fixture.lock().unwrap().image = true;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let source = add(&h, &cookie).await;
+    let doc = import(&h, &cookie).await;
+    let id = doc["id"].as_str().unwrap();
+    let (_, _, detail) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}"),
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    let image = detail["messages"][0].clone();
+    let mut raw = Vec::new();
+    for index in 0..55 {
+        let mut message = detail["messages"][1].clone();
+        message["message_id"] = json!(format!("om_filler_{index}"));
+        raw.push(message);
+    }
+    raw.push(image.clone());
+    let text = raw
+        .iter()
+        .map(|message| serde_json::to_string(message).unwrap() + "\n")
+        .collect::<String>();
+    let hash = orbit_server::auth::hash(&text);
+    let directory = h
+        .state
+        .config
+        .memory
+        .as_ref()
+        .unwrap()
+        .directory
+        .join("_communications")
+        .join(source.to_string())
+        .join(id);
+    std::fs::write(directory.join(format!("{hash}.jsonl")), text).unwrap();
+    sqlx::query("UPDATE communication_documents SET raw_hash=$2,version=version+1,summary_hash=NULL WHERE id=$1").bind(Uuid::parse_str(id).unwrap()).bind(hash).execute(&h.state.pool).await.unwrap();
+    let fingerprint = orbit_server::auth::hash(&format!(
+        "{}:{}:{}",
+        image["update_time"].as_i64().unwrap(),
+        image["deleted"].as_bool().unwrap(),
+        image["payload"]
+    ));
+    sqlx::query("INSERT INTO communication_images(source_id,message_id,image_key,fingerprint,error) VALUES($1,'om_me','img_fixture',$2,'communication_image_unavailable') ON CONFLICT(source_id,message_id,image_key) DO UPDATE SET description=NULL,error=excluded.error,fingerprint=excluded.fingerprint").bind(source).bind(fingerprint).execute(&h.state.pool).await.unwrap();
+    communications::progress::step(&h.state).await.unwrap();
+    for filter in ["failed", "images_failed"] {
+        let (status, _, files) = h
+            .request(
+                "GET",
+                &format!("/api/communications/library/files?status={filter}"),
+                Some(&cookie),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(files["total"], 1);
+        assert_eq!(files["items"][0]["images_failed"], 1);
+    }
+    let path = format!("/api/communications/documents/{id}?image_errors=true");
+    assert_eq!(
+        h.request("GET", &path, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, _, filtered) = h.request("GET", &path, Some(&cookie), Value::Null).await;
+    assert_eq!(filtered["total"], 1);
+    assert_eq!(filtered["messages"][0]["message_id"], "om_me");
+    assert_eq!(
+        filtered["messages"][0]["images"][0]["error"],
+        "communication_image_unavailable"
+    );
+    // HTTP 类别来自本地夹具，不把 403 模拟结果当作线上失败原因。
+    for (status, error) in [
+        (StatusCode::FORBIDDEN, "communication_image_forbidden"),
+        (StatusCode::NOT_FOUND, "communication_image_not_found"),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "communication_image_rate_limited",
+        ),
+    ] {
+        fixture.lock().unwrap().image_status = status;
+        let url = filtered["messages"][0]["images"][0]["url"]
+            .as_str()
+            .unwrap();
+        let (result, _, body) = h.request("GET", url, Some(&cookie), Value::Null).await;
+        assert_eq!(result, StatusCode::BAD_GATEWAY);
+        assert_eq!(body["error"], error);
+    }
+    let (_, _, normal) = h
+        .request(
+            "GET",
+            &format!("/api/communications/documents/{id}"),
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(normal["total"], 56);
+    assert_eq!(normal["messages"].as_array().unwrap().len(), 50);
+    sqlx::query("UPDATE communication_images SET fingerprint='stale'")
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    let (_, _, stale) = h.request("GET", &path, Some(&cookie), Value::Null).await;
+    assert_eq!(stale["total"], 0);
+    sqlx::query("UPDATE communication_documents SET version=version+1")
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    let (_, _, stale_files) = h
+        .request(
+            "GET",
+            "/api/communications/library/files?status=images_failed",
+            Some(&cookie),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(stale_files["total"], 0);
+    server.abort();
     h.close().await;
 }

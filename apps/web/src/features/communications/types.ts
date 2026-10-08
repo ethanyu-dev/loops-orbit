@@ -35,6 +35,10 @@ export interface Document {
   summary_hash: string | null;
   /** 摘要故障分类。 */
   summary_error: string | null;
+  /** 当前版本的失败图片数，由后台核对快照提供。 */
+  images_failed?: number;
+  /** 当前后台快照报告的资料处理失败。 */
+  processing_failed?: boolean;
 }
 /** 每个归纳都可核对原话，承诺归属由服务端检查。 */
 export interface Item {

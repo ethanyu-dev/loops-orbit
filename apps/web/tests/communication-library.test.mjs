@@ -15,6 +15,7 @@ test('日期目录跨月分组并保留同日多群文件', () => {
 test('文件整理状态区分核对、失败、完成和等待', () => {
   assert.equal(fileStatus({ extraction_version: 0, summary_hash: 'old' }).label, '核对中');
   assert.equal(fileStatus({ extraction_version: 1, summary_error: 'failed', summary_hash: 'old' }).label, '整理失败');
+  assert.equal(fileStatus({ extraction_version: 1, summary_hash: 'ready', images_failed: 2 }).label, '图片失败 · 2');
   assert.equal(fileStatus({ extraction_version: 1, summary_hash: 'ready' }).label, '已整理');
   assert.equal(fileStatus({ extraction_version: 1, summary_hash: null }).label, '待整理');
 });

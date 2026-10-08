@@ -229,7 +229,12 @@ export function HistoryProgress({
       {(totals.errors > 0 || totals.images_failed > 0) && (
         <div className="sync-alert">
           {totals.errors > 0 ? `${totals.errors} 份资料处理失败` : '部分图片解读失败'}
-          ，后台会自动重试。<Link to="/communications/records">查看沟通资料 →</Link>
+          ，后台会自动重试。
+          <Link
+            to={`/communications/records?day=all&status=${totals.errors > 0 ? 'failed' : 'images_failed'}`}
+          >
+            查看失败资料 →
+          </Link>
         </div>
       )}
       <details className="sync-explanation">

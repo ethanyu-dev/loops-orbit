@@ -86,6 +86,8 @@ pub(super) struct FileQuery {
     /// 从零开始的文件偏移。
     #[serde(default)]
     offset: u32,
+    /// 失败筛选跨完整历史，图片状态来自当前版本的后台核对快照。
+    status: Option<String>,
 }
 
 /// 列表只暴露展示所需的字段，不返回原文文件路径和访问凭证。
@@ -111,6 +113,10 @@ pub(super) struct LibraryFile {
     summary_hash: Option<String>,
     /// 整理故障分类，不包含原始上游响应。
     summary_error: Option<String>,
+    /// 当前版本已核对的失败图片数量；无有效快照时为零。
+    images_failed: i64,
+    /// 文件读取或其他处理失败，可能尚无摘要错误分类。
+    processing_failed: bool,
 }
 
 /// 文件分页数量由后端决定，避免客户端请求无界增长。
@@ -138,6 +144,13 @@ pub(super) async fn files(
             "invalid_communication_library",
         ));
     }
+    let status = input.status.as_deref().unwrap_or("all");
+    if !matches!(status, "all" | "failed" | "images_failed") {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "invalid_communication_library",
+        ));
+    }
     let query = input.q.trim();
     // 总数和当前页使用同一个数据库快照，避免后台导入使翻页提示自相矛盾。
     let mut transaction = state.pool.begin().await?;
@@ -148,6 +161,7 @@ pub(super) async fn files(
         .bind(&identity.owner)
         .bind(&input.day)
         .bind(query)
+        .bind(status)
         .fetch_one(&mut *transaction)
         .await?;
     let items: Vec<LibraryFile> =
@@ -157,6 +171,7 @@ pub(super) async fn files(
             .bind(query)
             .bind(FILE_PAGE_SIZE)
             .bind(i64::from(input.offset))
+            .bind(status)
             .fetch_all(&mut *transaction)
             .await?;
     transaction.commit().await?;

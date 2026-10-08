@@ -30,6 +30,9 @@ export function DocumentLibrary({
 }) {
   const [params, setParams] = useSearchParams();
   const query = params.get('q') ?? '';
+  const issueFilter = ['failed', 'images_failed'].includes(params.get('status') || '')
+    ? params.get('status')!
+    : 'all';
   const mode = params.get('mode') === 'content' ? 'content' : 'files';
   const offset = readOffset(params.get('offset'));
   const [draft, setDraft] = useState(query);
@@ -39,12 +42,12 @@ export function DocumentLibrary({
   const requestedDay = params.get('day');
   const day =
     requestedDay === 'all' ? '' : (requestedDay ?? (query ? '' : (directory.days[0]?.day ?? '')));
-  const contentSearch = mode === 'content' && !!query;
+  const contentSearch = mode === 'content' && !!query && issueFilter === 'all';
   useEffect(() => {
     setDraft(query);
     setSearchMode(mode);
   }, [query, mode]);
-  const fileParams = new URLSearchParams({ offset: String(offset) });
+  const fileParams = new URLSearchParams({ offset: String(offset), status: issueFilter });
   if (day) fileParams.set('day', day);
   if (query) fileParams.set('q', query);
   const ready =
@@ -72,12 +75,20 @@ export function DocumentLibrary({
   const groups = groupFiles(files);
   const loading = result.loading || (!ready && directory.loading);
   const loadError = result.error || (!ready ? directory.error : '');
-  const title = query ? `“${query}”的搜索结果` : day || '全部资料';
+  const title =
+    issueFilter !== 'all'
+      ? issueFilter === 'images_failed'
+        ? '图片解读失败'
+        : '处理失败的资料'
+      : query
+        ? `“${query}”的搜索结果`
+        : day || '全部资料';
 
   /** 搜索始终从全部日期的第一页开始，避免旧目录限制让用户误以为没有匹配。 */
   function search(event: FormEvent) {
     event.preventDefault();
     const next = new URLSearchParams();
+    if (issueFilter !== 'all' && searchMode !== 'content') next.set('status', issueFilter);
     if (draft.trim()) {
       next.set('q', draft.trim());
       next.set('mode', searchMode);
@@ -87,7 +98,7 @@ export function DocumentLibrary({
   }
   /** 切换目录清空旧搜索与分页，链接可复制并支持浏览器返回。 */
   function openDay(value: string) {
-    setParams({ day: value });
+    setParams({ day: value, ...(issueFilter === 'all' ? {} : { status: issueFilter }) });
   }
   /** 翻页保留已解析的日期，刷新后不会因新增资料自动跳到另一天。 */
   function openPage(value: number) {
@@ -97,10 +108,11 @@ export function DocumentLibrary({
     setParams(next);
   }
   /** 详情地址携带浏览状态，详情页的返回按钮能恢复搜索和文件分页。 */
-  function documentPath(id: string) {
+  function documentPath(file: LibraryFile) {
     const state = new URLSearchParams(params);
     if (!query) state.set('day', day || 'all');
-    return `/communications/records/${id}?${state}`;
+    if (issueFilter !== 'all' && file.images_failed) state.set('image_errors', 'true');
+    return `/communications/records/${file.id}?${state}`;
   }
 
   return (
@@ -153,6 +165,30 @@ export function DocumentLibrary({
           <span>刷新</span>
         </button>
       </div>
+      <div className="library-failure-filter">
+        <label>
+          处理状态{' '}
+          <select
+            aria-label="筛选资料处理状态"
+            value={issueFilter}
+            onChange={(event) => {
+              const next = new URLSearchParams(params);
+              next.set('status', event.target.value);
+              next.set('day', 'all');
+              next.delete('offset');
+              next.delete('mode');
+              setParams(next);
+            }}
+          >
+            <option value="all">全部资料</option>
+            <option value="failed">全部处理失败</option>
+            <option value="images_failed">图片解读失败</option>
+          </select>
+        </label>
+        {issueFilter !== 'all' && (
+          <span>按当前筛选范围显示失败资料，图片状态由后台分批核对，可能稍有延迟。</span>
+        )}
+      </div>
       <div className="library-layout">
         <DirectoryTree
           days={directory.days}
@@ -204,11 +240,19 @@ export function DocumentLibrary({
           ) : !files.length ? (
             <div className="library-empty">
               <FolderOpen size={34} />
-              <h3>{query ? '没有找到匹配资料' : '这个目录还没有资料'}</h3>
+              <h3>
+                {issueFilter !== 'all'
+                  ? '当前范围没有失败资料'
+                  : query
+                    ? '没有找到匹配资料'
+                    : '这个目录还没有资料'}
+              </h3>
               <p>
-                {query
-                  ? '试试其他关键词，或切换搜索范围。'
-                  : '订阅会话并导入历史消息后，文件会出现在对应日期下。'}
+                {issueFilter !== 'all'
+                  ? '任务可能已重试成功，或统计仍在更新；可以刷新查看。'
+                  : query
+                    ? '试试其他关键词，或切换搜索范围。'
+                    : '订阅会话并导入历史消息后，文件会出现在对应日期下。'}
               </p>
               {query ? (
                 <button onClick={() => openDay('all')}>返回全部资料</button>
@@ -239,7 +283,7 @@ export function DocumentLibrary({
                   {group.files.map((file) => {
                     const status = fileStatus(file);
                     return (
-                      <Link className="library-file" to={documentPath(file.id)} key={file.id}>
+                      <Link className="library-file" to={documentPath(file)} key={file.id}>
                         <span className="library-file-main">
                           <span className="library-file-icon">
                             <FileText size={21} />

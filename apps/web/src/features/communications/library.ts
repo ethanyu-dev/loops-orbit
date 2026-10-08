@@ -62,6 +62,8 @@ export function groupFiles(files: LibraryFile[]) {
 export function fileStatus(file: Document) {
   if (file.extraction_version === 0) return { label: '核对中', kind: 'pending' };
   if (file.summary_error) return { label: '整理失败', kind: 'error' };
+  if (file.processing_failed) return { label: '资料处理失败', kind: 'error' };
+  if (file.images_failed) return { label: `图片失败 · ${file.images_failed}`, kind: 'error' };
   if (file.summary_hash) return { label: '已整理', kind: 'ready' };
   return { label: '待整理', kind: 'pending' };
 }

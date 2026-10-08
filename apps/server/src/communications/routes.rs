@@ -311,6 +311,9 @@ struct Offset {
     /// 从零起的原文位置。
     #[serde(default)]
     offset: usize,
+    /// 先筛出失败图片所在消息再分页，避免失败项藏在原文后续页中。
+    #[serde(default)]
+    image_errors: bool,
 }
 async fn document(
     State(state): State<AppState>,
@@ -339,7 +342,16 @@ async fn document(
     }
     let raw = store::raw(&state, &doc)?;
     let image_notes = super::images::notes(&state, &doc).await?;
-    let messages: Vec<_>=raw.iter().skip(page.offset).take(50).map(|m| {
+    let filtered: Vec<_> = raw
+        .iter()
+        .filter(|message| {
+            !page.image_errors
+                || image_notes
+                    .iter()
+                    .any(|note| note.message_id == message.message_id && note.error.is_some())
+        })
+        .collect();
+    let messages: Vec<_>=filtered.iter().skip(page.offset).take(50).map(|m| {
         let mut value=serde_json::to_value(m).expect("消息可序列化");
         value["sender_name"]=json!(m.display_name());
         value["relation"]=m.payload["relation"].clone();
@@ -361,7 +373,7 @@ async fn document(
         v
     });
     Ok(Json(
-        json!({"source_label":source_label,"document":doc,"summary":summary,"total":raw.len(),"messages":messages}),
+        json!({"source_label":source_label,"document":doc,"summary":summary,"total":filtered.len(),"messages":messages}),
     ))
 }
 /// 查询正文限长，与聊天检索复用同一身份边界。
