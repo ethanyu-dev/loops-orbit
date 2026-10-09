@@ -9,6 +9,7 @@ mod library;
 mod members;
 mod mentions;
 mod oauth;
+mod post;
 pub mod private_subscription;
 pub mod progress;
 mod removal;
@@ -35,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 // 发送能力还受接管开关与实际授予范围约束，授权本身不会开启自动回复。
-const SCOPES: &str = "offline_access im:message im:message.send_as_user im:chat:read im:message:readonly im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user";
+const SCOPES: &str = "offline_access im:message im:message.send_as_user im:chat:read im:message:readonly im:message.group_msg:get_as_user im:message.p2p_msg:get_as_user contact:user.base:readonly";
 const CALLBACK: &str = "/api/communications/oauth/callback";
 // 每次只处理一页，会话总量不再受手工选择上限限制。
 pub(super) const LOCAL_TIMEZONE: chrono_tz::Tz = chrono_tz::Asia::Shanghai;

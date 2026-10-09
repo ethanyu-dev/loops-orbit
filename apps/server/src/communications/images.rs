@@ -44,12 +44,18 @@ struct CachedNote {
     /// 最近失败分类。
     error: Option<String>,
 }
-/// 原文编辑或撤回后不能复用旧图片解读。
+/// 原文编辑、解析修正或撤回后不能复用旧图片解读，避免解读继续引用修正前的重复文字。
 pub(super) fn fingerprint(message: &store::Message) -> String {
-    auth::hash(&format!(
+    let mut evidence = format!(
         "{}:{}:{}",
         message.update_time, message.deleted, message.payload
-    ))
+    );
+    // 仅富文本附带解析正文；普通图片维持原指纹，避免升级时无关解读全部重算。
+    if message.message_type == "post" {
+        evidence.push(':');
+        evidence.push_str(&message.text);
+    }
+    auth::hash(&evidence)
 }
 /// 只提取飞书原生图片节点；不跟随消息正文中的任意图片 URL。
 pub(super) fn keys(message: &store::Message) -> Vec<String> {
@@ -83,7 +89,13 @@ pub(super) fn keys(message: &store::Message) -> Vec<String> {
         && let Some(content) = message.payload["body"]["content"].as_str()
         && let Ok(body) = serde_json::from_str::<Value>(content)
     {
-        walk(&body, &mut out);
+        if message.message_type == "post" {
+            if let Some(body) = super::post::body(&body) {
+                walk(&body["content"], &mut out);
+            }
+        } else {
+            walk(&body, &mut out);
+        }
     }
     out
 }
@@ -284,4 +296,24 @@ pub(super) async fn step(state: &AppState) -> ApiResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 验证图片和文字选取同一语言、正文修正使解读失效；不调用模型或验证真实图片内容。
+    #[test]
+    fn post_images_follow_selected_language_and_text_version() {
+        let value = json!({"message_id":"om_fixture","create_time":"1000","msg_type":"post","body":{"content":json!({
+            "zh_cn":{"content":[[{"tag":"text","text":"中文"}],[{"tag":"img","image_key":"img_cn"}]]},
+            "en_us":{"content":[[{"tag":"text","text":"English"}],[{"tag":"img","image_key":"img_en"}]]}
+        }).to_string()}});
+        let mut message = super::super::sync::normalize(&value, "oc_fixture", "ou_me").unwrap();
+        assert_eq!(keys(&message), vec!["img_cn"]);
+        let original = fingerprint(&message);
+        message.text = "中文\n中文".into();
+        assert_ne!(fingerprint(&message), original);
+    }
 }

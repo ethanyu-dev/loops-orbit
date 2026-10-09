@@ -25,6 +25,8 @@ async fn oauth_uses_api_origin_and_returns_to_frontend() {
     let scopes: Vec<_> = params["scope"].split_whitespace().collect();
     assert!(scopes.contains(&"im:message"));
     assert!(scopes.contains(&"im:message.send_as_user"));
+    // 缺名补全申请基本姓名权限；夹具不能证明真实租户已批准或返回姓名。
+    assert!(scopes.contains(&"contact:user.base:readonly"));
     let response = h
         .app
         .clone()

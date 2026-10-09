@@ -292,14 +292,14 @@ pub(super) async fn reprocess(state: &AppState) -> ApiResult<()> {
     if !current(state, &doc, &source, version).await? {
         return Ok(());
     }
-    let names = super::members::names(state, &source, &token, &values, &open_id).await;
+    let names = super::members::names(state, &source, &token, &values, &open_id, &mode).await;
     let mut messages = vec![];
     for value in &values {
         if !current(state, &doc, &source, version).await? {
             return Ok(());
         }
         let mut normalized = sync::normalize(value, &source.chat_id, &open_id)?;
-        if normalized.sender_name.is_empty()
+        if normalized.sender_name.trim().is_empty()
             && normalized.sender_id_type == "open_id"
             && let Some(name) = names.get(&normalized.sender_id)
         {
