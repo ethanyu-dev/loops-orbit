@@ -6,6 +6,7 @@ import { useSearchParams } from 'react-router-dom';
 import { processingError } from './processingError';
 import { canRetrySummary, summaryNotice } from './summaryStatus';
 import type { Detail, Item } from './types';
+import { KnowledgeExtraction } from '../knowledge/KnowledgeExtraction';
 
 // 分类展示不暗示机器摘要已被用户确认。
 const LABELS: Record<string, string> = {
@@ -144,6 +145,12 @@ export function DocumentView({
           </p>
         ) : (
           <>
+            <KnowledgeExtraction
+              key={`${detail.document.id}-${detail.document.version}`}
+              documentId={detail.document.id}
+              version={detail.document.version}
+              day={detail.document.day}
+            />
             {!imageErrors && (
               <section className="document-section" aria-labelledby="document-summary-title">
                 <div className="document-section-heading">

@@ -1,5 +1,6 @@
 mod deployment_tests;
 mod extraction_tests;
+mod knowledge_tests;
 mod library_tests;
 mod private_subscription_tests;
 mod progress_tests;

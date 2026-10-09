@@ -137,7 +137,7 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
         return Ok("not_matched");
     };
     sqlx::query("UPDATE communication_takeover_jobs SET topic=$2,probability=$3 WHERE id=$1 AND status='evaluating'").bind(job.id).bind(&topic).bind(probability).execute(&state.pool).await?;
-    let evidence = evidence::gather(state, &message.text, &topic, &message.message_id).await?;
+    let evidence = evidence::gather(state, &message.text, &topic).await?;
     if evidence.is_empty() {
         return Ok("no_evidence");
     }
@@ -165,7 +165,6 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
     }
     // 发送期间与关闭、遗忘、资料修正串行；网络请求受 client 的五秒上限约束。
     let _communication = state.communications.lock().await;
-    let _memory = state.memory.lock().await;
     if !active(state, job).await?
         || !evidence::current(state, &evidence).await?
         || Utc::now().timestamp_millis() - message.create_time > MAX_AGE_MS

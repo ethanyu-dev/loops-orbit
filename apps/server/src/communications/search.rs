@@ -5,14 +5,12 @@ use crate::{
     memory::{Entry, embedding, lexical::Lexical},
 };
 use serde::Serialize;
-use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 // 独立索引命名空间，不与管理员个人记忆或任何访客混用。
 pub(super) const VECTOR_OWNER: &str = "communications:admin";
 const MAX_RESULTS: usize = 6;
-const CONTEXT_PROMPT: &str = include_str!("../../prompts/communication_context.md");
 /// 检索结果携带原文证据，而不是只返回无来源的自然语言总结。
 #[derive(Serialize)]
 pub struct Hit {
@@ -253,57 +251,4 @@ pub(crate) async fn remove_vector(state: &AppState, id: Uuid) -> ApiResult<()> {
     embedding::remove(&state.pool, VECTOR_OWNER, id)
         .await
         .map_err(unavailable)
-}
-
-/// 在对话中只附加带资料边界的检索证据，长度固定，绝不成为新的用户消息任务。
-pub(crate) async fn context(
-    state: &AppState,
-    owner: &str,
-    query: &str,
-) -> ApiResult<Option<String>> {
-    let hits = search(state, owner, query).await?;
-    if hits.is_empty() {
-        return Ok(None);
-    }
-    let _guard = state.communications.lock().await;
-    let current = documents(state).await?;
-    let mut evidence = vec![];
-    let mut bytes = 0;
-    for hit in hits {
-        if !current
-            .iter()
-            .any(|d| d.id == hit.document.id && d.version == hit.document.version)
-        {
-            continue;
-        }
-        let raw = store::raw(state, &hit.document)?;
-        let sender = |id: &str| {
-            raw.iter()
-                .find(|m| m.message_id == id)
-                .map(|m| m.display_name())
-                .unwrap_or("会话成员")
-        };
-        let time = |millis: i64| {
-            chrono::DateTime::from_timestamp_millis(millis)
-                .map(|t| t.with_timezone(&super::LOCAL_TIMEZONE).to_rfc3339())
-                .unwrap_or_default()
-        };
-        let notes = super::images::notes(state, &hit.document).await?;
-        // 只提供核对依据与后续读取标识，不生成会话跳转地址，避免模型将其附到回复。
-        let value = json!({"document_id":hit.document.id,"version":hit.document.version,"source":hit.label,"day":hit.document.day,"summary_status":hit.document.summary_status,
-            "summary_coverage":hit.summary.as_ref().map(|s|json!({"rejected_count":s.rejected_count,"failed_chunk_count":s.failed_chunk_count})),
-            "messages":hit.messages.iter().map(|m|json!({"sender":m.display_name(),"is_me":m.is_me,"time":time(m.create_time),"text":m.text.chars().take(1800).collect::<String>()})).collect::<Vec<_>>(),
-            "summary":hit.summary.as_ref().map(|s|s.items.iter().enumerate().take(8).map(|(index,i)|json!({"item":index,"kind":i.kind,"text":i.text,"quote":i.quote,"sender":sender(&i.message_id),"is_me":i.is_me,"time":time(i.create_time)})).collect::<Vec<_>>()),
-            "image_interpretations":notes.iter().filter_map(|n|n.description.as_ref().map(|text|json!({"sender":sender(&n.message_id),"interpretation":text}))).take(8).collect::<Vec<_>>()});
-        let size = value.to_string().len();
-        if bytes + size > 16000 {
-            break;
-        }
-        bytes += size;
-        evidence.push(value);
-    }
-    Ok(Some(format!(
-        "{CONTEXT_PROMPT}\n{}",
-        json!({"retrieval_kind":"relevance_candidates","is_exhaustive":false,"returned_documents":evidence.len(),"documents":evidence})
-    )))
 }

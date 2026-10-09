@@ -19,7 +19,9 @@ impl<'a> Host<'a> {
         let followups = std::sync::Arc::new(followups::tools::Host::new(state, job).await?);
         let mut providers: Vec<std::sync::Arc<dyn agent_runtime::tools::Host + 'a>> =
             vec![followups.clone()];
-        if communications::search::allowed(state, &followups.owner).await? {
+        if crate::auth::is_account_owner(state, &followups.owner).await?
+            && communications::search::allowed(state, &followups.owner).await?
+        {
             providers.push(std::sync::Arc::new(Communications {
                 state,
                 job,

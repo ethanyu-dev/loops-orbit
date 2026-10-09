@@ -166,7 +166,7 @@ async fn streaming_snapshot_survives_detail_reload() {
 
 /// 构造稳定历史用来跨过摘要阈值，避免把夹具数据描述成真实模型产出的事实。
 async fn seed_history(h: &Harness, id: Uuid, first: &str) {
-    for index in 0..20 {
+    for index in 0..28 {
         let run = Uuid::new_v4();
         let input = if index == 0 {
             first.to_owned()
@@ -204,7 +204,7 @@ async fn summary_preserves_older_context_and_recent_corrections() {
         .await;
     let (stop, receiver) = tokio::sync::watch::channel(false);
     let task = tokio::spawn(worker::run_worker(h.state.clone(), receiver));
-    wait_for(&h.state, "completed", 41).await;
+    wait_for(&h.state, "completed", 57).await;
     {
         let requests = h.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);

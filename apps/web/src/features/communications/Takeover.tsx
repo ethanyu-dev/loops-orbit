@@ -5,7 +5,7 @@ import './takeover.css';
 // 处理原因由服务端枚举映射，不向界面展示供应商响应或凭证。
 const REASONS: Record<string, string> = {
   not_matched: '未明确匹配单一问题',
-  no_evidence: '知识库没有找到依据',
+  no_evidence: '没有找到已发布的通用知识',
   unanswerable: '无法形成有依据的完整回答',
   answer_not_supported: '回答未通过证据复核',
   owner_replied: '你已回复',
@@ -156,7 +156,7 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
         <h2>特定问题自动接管</h2>
         <p>
           仅处理已订阅私聊的新文字消息。Jev
-          判断是否属于你允许的问题，现有模型结合个人记忆和沟通资料回答。无法完整回答时保持静默，每条回复固定带有{' '}
+          判断是否属于你允许的问题，现有模型仅使用你已发布的通用知识回答，不读取私人记忆或其他会话原文。无法完整回答时保持静默，每条回复固定带有{' '}
           <strong>[agent]</strong> 标识。
         </p>
         <p>

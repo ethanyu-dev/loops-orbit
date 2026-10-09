@@ -84,36 +84,72 @@ async fn generate(
 ) -> ApiResult<Option<Result<String, agent_runtime::Failure>>> {
     let (progress, latest) = watch::channel(String::new());
     let work = async {
-        let mut history =
-            crate::context::prepare(state, job)
+        let owner: String = sqlx::query_scalar("SELECT owner FROM conversations WHERE id=$1")
+            .bind(job.conversation_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|_| agent_runtime::Failure {
+                code: "storage_unavailable",
+                retryable: true,
+            })?;
+        let external = !crate::auth::is_account_owner(state, &owner)
+            .await
+            .map_err(|error| agent_runtime::Failure {
+                code: error.1,
+                retryable: true,
+            })?;
+        // 读取已发布知识并记录知识代次，使撤回取消在途生成并清空旧历史。
+        let retrieved =
+            crate::rag::retrieve(state, &job.input, (!external).then_some(owner.as_str()))
                 .await
                 .map_err(|error| agent_runtime::Failure {
                     code: error.1,
-                    retryable: error.0.is_server_error(),
-                })?;
-        if state.config.memory.is_some() {
-            let owner: String = sqlx::query_scalar("SELECT owner FROM conversations WHERE id=$1")
-                .bind(job.conversation_id)
-                .fetch_one(&state.pool)
-                .await
-                .map_err(|_| agent_runtime::Failure {
-                    code: "storage_unavailable",
                     retryable: true,
                 })?;
+        let knowledge = crate::knowledge::published(&retrieved);
+        {
+            let _guard = state.communications.lock().await;
+            for entry in &knowledge {
+                if !crate::knowledge::current(state, entry.id, entry.version)
+                    .await
+                    .map_err(|error| agent_runtime::Failure {
+                        code: error.1,
+                        retryable: true,
+                    })?
+                {
+                    return Err(agent_runtime::Failure {
+                        code: "knowledge_changed",
+                        retryable: true,
+                    });
+                }
+            }
+            sqlx::query("UPDATE runs SET knowledge_revision=(SELECT revision FROM knowledge_state) WHERE id=$1 AND lease_token=$2 AND status='running'")
+            .bind(job.id).bind(job.lease_token).execute(&state.pool).await
+            .map_err(|_|agent_runtime::Failure{code:"storage_unavailable",retryable:true})?;
+        }
+        let mut history = crate::context::prepare_for_audience(state, job, external)
+            .await
+            .map_err(|error| agent_runtime::Failure {
+                code: error.1,
+                retryable: error.0.is_server_error(),
+            })?;
+        if let Some(content) = crate::knowledge::context(&knowledge) {
+            history.insert(
+                0,
+                agent_runtime::Message {
+                    role: "user".into(),
+                    content,
+                },
+            );
+        }
+        if !external && state.config.memory.is_some() {
             let background = crate::memory::context(state, &owner, &history)
                 .await
                 .map_err(|error| agent_runtime::Failure {
                     code: error.1,
                     retryable: true,
                 })?;
-            if let Some(communications) =
-                crate::communications::search::context(state, &owner, &job.input)
-                    .await
-                    .map_err(|error| agent_runtime::Failure {
-                        code: error.1,
-                        retryable: true,
-                    })?
-            {
+            if !external && let Some(communications) = crate::rag::private_context(&retrieved) {
                 history.insert(
                     0,
                     agent_runtime::Message {
@@ -140,13 +176,14 @@ async fn generate(
                     code: error.1,
                     retryable: true,
                 })?;
-        if let Some(background) =
-            host.background()
-                .await
-                .map_err(|error| agent_runtime::Failure {
-                    code: error.1,
-                    retryable: true,
-                })?
+        if !external
+            && let Some(background) =
+                host.background()
+                    .await
+                    .map_err(|error| agent_runtime::Failure {
+                        code: error.1,
+                        retryable: true,
+                    })?
         {
             history.insert(
                 0,
@@ -156,14 +193,16 @@ async fn generate(
                 },
             );
         }
-        if state.config.model.tools_enabled {
-            state
-                .runtime
-                .run_with_tools(&history, Some(&progress), Some(&host))
-                .await
-        } else {
-            state.runtime.run_stream(&history, Some(&progress)).await
-        }
+        state
+            .runtime
+            .run_for_audience(
+                &history,
+                Some(&progress),
+                (state.config.model.tools_enabled && !external)
+                    .then_some(&host as &dyn agent_runtime::tools::Host),
+                external,
+            )
+            .await
     };
     let work = tokio::time::timeout(Duration::from_secs(RUN_TIMEOUT_SECONDS), work);
     tokio::pin!(work);

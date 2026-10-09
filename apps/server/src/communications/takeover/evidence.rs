@@ -1,12 +1,10 @@
-use super::super::{search, store};
-use crate::{AppState, error::ApiResult, memory};
+use crate::{AppState, error::ApiResult, knowledge};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 // 总证据有界，避免整个个人资料库直接进入外发回答上下文。
 const MAX_EVIDENCE: usize = 16;
-const MAX_TEXT_CHARS: usize = 2000;
 const MAX_ANSWER_CHARS: usize = 1500;
 
 /// 文本与原始版本一同保存，发送前重新核对删除、暂停和修正。
@@ -14,72 +12,32 @@ const MAX_ANSWER_CHARS: usize = 1500;
 pub(super) struct Evidence {
     /// 提示词内短标识，不能作为对外消息引用。
     pub id: String,
-    /// 检索到的原文；模型摘要不作为最终依据。
+    /// 本人批准的对外知识正文，不包含原始私聊或私人证据。
     pub text: String,
-    /// 仅服务端使用的来源版本。
+    /// 已发布知识及其确认版本，只供发送前核验。
     #[serde(skip)]
-    origin: Origin,
+    origin: (Uuid, i64),
 }
-/// 两种现有知识来源各自使用原有的版本边界。
-enum Origin {
-    /// 个人记忆的稳定 ID 及完整指纹。
-    Memory(Uuid, String),
-    /// 沟通原文的文档 ID、版本、文件指纹和来源版本。
-    Communication(Uuid, i64, String, i64),
-}
-/// 按问题和命中主题检索已有知识，排除输入本身与 agent 已发内容。
+/// 对外起草只检索本人已确认的知识正文，不读取个人记忆、私聊原文和来源证据。
 pub(super) async fn gather(
     state: &AppState,
     question: &str,
     topic: &str,
-    incoming_id: &str,
 ) -> ApiResult<Vec<Evidence>> {
     let query = format!(
         "{topic} {}",
         question.chars().take(1000).collect::<String>()
     );
-    let mut result = vec![];
-    for entry in memory::search(state, "admin", &query)
+    Ok(knowledge::search(state, &query)
         .await?
         .into_iter()
-        .take(6)
-    {
-        result.push(Evidence {
-            id: format!("e{}", result.len()),
-            text: entry.content.chars().take(MAX_TEXT_CHARS).collect(),
-            origin: Origin::Memory(entry.id, entry.hash()),
-        });
-    }
-    for hit in search::search(state, "admin", &query).await? {
-        let source_version: i64 =
-            sqlx::query_scalar("SELECT version FROM communication_sources WHERE id=$1")
-                .bind(hit.document.source_id)
-                .fetch_one(&state.pool)
-                .await?;
-        for message in hit.messages {
-            if result.len() >= MAX_EVIDENCE {
-                break;
-            }
-            if message.message_id == incoming_id
-                || message.deleted
-                || message.text.trim().is_empty()
-                || message.text.starts_with(super::AGENT_PREFIX)
-            {
-                continue;
-            }
-            result.push(Evidence {
-                id: format!("e{}", result.len()),
-                text: message.text.chars().take(MAX_TEXT_CHARS).collect(),
-                origin: Origin::Communication(
-                    hit.document.id,
-                    hit.document.version,
-                    hit.document.raw_hash.clone(),
-                    source_version,
-                ),
-            });
-        }
-    }
-    Ok(result)
+        .enumerate()
+        .map(|(index, entry)| Evidence {
+            id: format!("e{index}"),
+            text: entry.content,
+            origin: (entry.id, entry.version),
+        })
+        .collect())
 }
 /// 只接受结构化答案，空答案严格表示静默。
 #[derive(Deserialize)]
@@ -120,29 +78,11 @@ pub(super) fn validate(value: Value, evidence: &[Evidence]) -> Option<String> {
     }
     Some(answer)
 }
-/// 调用方持有资料和记忆锁，原文读取错误或版本变化一律停止外发。
+/// 调用方持有沟通锁，已撤回、已编辑或删除的知识一律停止外发。
 pub(super) async fn current(state: &AppState, evidence: &[Evidence]) -> ApiResult<bool> {
-    let config = state.config.memory.as_ref().expect("采集要求记忆配置");
-    let entries =
-        memory::store::read(&config.directory, "admin").map_err(super::super::unavailable)?;
     for item in evidence {
-        match &item.origin {
-            Origin::Memory(id, hash) => {
-                if !entries
-                    .iter()
-                    .any(|e| e.id == *id && e.active() && e.hash() == *hash)
-                {
-                    return Ok(false);
-                }
-            }
-            Origin::Communication(id, version, hash, source_version) => {
-                let doc: Option<super::super::Document> = sqlx::query_as("SELECT d.id,d.source_id,d.day,d.raw_hash,d.version,d.extraction_version,d.summary_hash,d.summary_error,d.summary_status,d.summary_attempts FROM communication_documents d JOIN communication_sources s ON s.id=d.source_id WHERE d.id=$1 AND d.version=$2 AND d.raw_hash=$3 AND s.version=$4 AND s.enabled AND s.subscribed AND NOT s.removal_pending")
-                    .bind(id).bind(version).bind(hash).bind(source_version).fetch_optional(&state.pool).await?;
-                let Some(doc) = doc else { return Ok(false) };
-                if store::raw_unchecked(state, &doc).is_err() {
-                    return Ok(false);
-                }
-            }
+        if !knowledge::current(state, item.origin.0, item.origin.1).await? {
+            return Ok(false);
         }
     }
     Ok(true)
@@ -158,7 +98,7 @@ mod tests {
         let evidence = vec![Evidence {
             id: "e0".into(),
             text: "请通过测试环境申请表提交用途。".into(),
-            origin: Origin::Memory(Uuid::nil(), String::new()),
+            origin: (Uuid::nil(), 1),
         }];
         assert!(validate(json!({"answer":null,"citations":[]}), &evidence).is_none());
         assert!(
