@@ -469,6 +469,12 @@ async fn retrieval_is_scoped_and_used_as_external_evidence() {
             .unwrap()
             .is_empty()
     );
+    // 摘要向量和 RAG 分块由独立循环更新；明确完成当前版本的 RAG 索引，
+    // 不依赖后台调度恰好在停机前运行，也不把索引尚未就绪误判为身份隔离失败。
+    while orbit_server::rag::index::documents_step(&h.state)
+        .await
+        .unwrap()
+    {}
     memory::complete(&h, &cookie, conv, "材料怎么安排的？").await;
     {
         let requests = h.requests.lock().unwrap();
