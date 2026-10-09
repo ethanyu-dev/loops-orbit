@@ -141,6 +141,9 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
     ) {
         return Ok("expired");
     }
+    // 保留本次实际使用的阈值，后续修改设置不能改变旧记录的解释。
+    sqlx::query("UPDATE communication_takeover_jobs SET decision_threshold=$2 WHERE id=$1 AND status='evaluating'")
+        .bind(job.id).bind(settings.threshold).execute(&state.pool).await?;
     let topics: Vec<String> =
         serde_json::from_value(settings.topics).map_err(super::super::unavailable)?;
     let Some((topic, probability)) =
@@ -163,8 +166,20 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
     let Some(answer) = evidence::validate(generated, &evidence) else {
         return Ok("unanswerable");
     };
+    // 草稿在复核前单独保存；即使低分或复核故障，也不冒充已进入投递阶段的 answer。
+    let saved = sqlx::query("UPDATE communication_takeover_jobs SET draft_answer=$2 WHERE id=$1 AND status='evaluating'")
+        .bind(job.id).bind(&answer).execute(&state.pool).await?;
+    if saved.rows_affected() != 1 {
+        return Ok("scope_changed");
+    }
     input["proposed_answer"] = json!(answer);
-    if !decision::review(state, input, settings.threshold).await? {
+    let review_probability = decision::review(state, input).await?;
+    let saved = sqlx::query("UPDATE communication_takeover_jobs SET review_probability=$2 WHERE id=$1 AND status='evaluating'")
+        .bind(job.id).bind(review_probability).execute(&state.pool).await?;
+    if saved.rows_affected() != 1 {
+        return Ok("scope_changed");
+    }
+    if review_probability < settings.threshold {
         return Ok("answer_not_supported");
     }
     let token = client::access(state).await?;

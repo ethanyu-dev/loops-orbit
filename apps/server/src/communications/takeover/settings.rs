@@ -72,7 +72,7 @@ pub(crate) async fn read(
     identity.require_admin()?;
     let settings = load(&state).await?;
     let authorized: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_connections WHERE owner='admin' AND status='active' AND send_authorized)").fetch_one(&state.pool).await?;
-    let jobs: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'label',s.label,'question',j.message->>'text','status',j.status,'reason',j.reason,'topic',j.topic,'probability',j.probability,'answer',j.answer,'created_at',j.created_at) FROM communication_takeover_jobs j JOIN communication_sources s ON s.id=j.source_id ORDER BY j.created_at DESC LIMIT 50").fetch_all(&state.pool).await?;
+    let jobs: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'label',s.label,'question',j.message->>'text','status',j.status,'reason',j.reason,'topic',j.topic,'probability',j.probability,'answer',j.answer,'draft_answer',j.draft_answer,'review_probability',j.review_probability,'decision_threshold',j.decision_threshold,'created_at',j.created_at) FROM communication_takeover_jobs j JOIN communication_sources s ON s.id=j.source_id ORDER BY j.created_at DESC LIMIT 50").fetch_all(&state.pool).await?;
     Ok(Json(
         json!({"settings":settings,"rules_file":state.config.takeover_questions_file,"configured":state.config.typesafe.is_some(),"authorized":authorized,"jobs":jobs}),
     ))

@@ -70,6 +70,12 @@ interface Snapshot {
     topic: string | null;
     /** Jev 返回的肯定概率。 */
     probability: number | null;
+    /** 通过格式及引文校验的草稿，仅管理员可见，不代表已发送。 */
+    draft_answer: string | null;
+    /** 回答复核概率，与话题匹配概率独立；未记录时为空。 */
+    review_probability: number | null;
+    /** 这条任务实际使用的阈值，不随当前设置改变。 */
+    decision_threshold: number | null;
     /** 已进入投递阶段的带标识正文。 */
     answer: string | null;
     /** 消息首次入队时间。 */
@@ -270,8 +276,36 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
                     : ''}
                 </small>
                 <p className="takeover-answer">{job.question}</p>
+                {job.decision_threshold != null && (
+                  <p>
+                    回答复核：
+                    {job.review_probability != null
+                      ? `${(job.review_probability * 100).toFixed(1)}%`
+                      : '未取得分数'}
+                    {' · '}本次阈值 {(job.decision_threshold * 100).toFixed(1)}%
+                  </p>
+                )}
                 {job.reason && <p>{REASONS[job.reason] || '处理未完成，请检查连接与服务配置。'}</p>}
-                {job.answer && <p className="takeover-answer">{job.answer}</p>}
+                {job.draft_answer && (
+                  <details>
+                    <summary>查看生成草稿（不代表已发送）</summary>
+                    <p className="takeover-answer">{job.draft_answer}</p>
+                  </details>
+                )}
+                {job.reason === 'answer_not_supported' && (
+                  <p>复核分数未达到本次阈值；模型未提供具体拒绝理由。</p>
+                )}
+                {job.decision_threshold == null && job.reason === 'answer_not_supported' && (
+                  <p>历史记录未保存草稿和复核分数，无法还原。</p>
+                )}
+                {job.answer && (
+                  <div>
+                    <strong>
+                      {job.status === 'sent' ? '已发送正文' : '投递正文（请结合发送状态核对）'}
+                    </strong>
+                    <p className="takeover-answer">{job.answer}</p>
+                  </div>
+                )}
                 {job.status === 'unknown' && <p>请在飞书核对是否已发出；系统不会自动重发。</p>}
               </li>
             ))}
