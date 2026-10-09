@@ -12,6 +12,8 @@ const ERRORS: Record<string, string> = {
   provider_rejected: '模型服务拒绝请求，请检查额度、权限或模型参数',
   provider_unreachable: '无法连接模型服务或请求超时',
   provider_read_failed: '读取模型响应失败',
+  provider_output_limit: '模型输出达到上限，请减少单次整理范围或联系管理员调整预算',
+  provider_content_filtered: '模型服务过滤了本次输出，请调整问题后重试',
   provider_incomplete_response: '模型输出未完成，可能达到输出上限',
   provider_empty_response: '模型未返回有效内容',
   provider_invalid_json: '模型服务响应格式无效',

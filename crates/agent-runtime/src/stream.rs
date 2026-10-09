@@ -15,8 +15,12 @@ pub(crate) struct Decoder {
     calls: Vec<Value>,
     /// 上游已明确发送结束事件或 finish_reason。
     finished: bool,
+    /// 收到 [DONE] 后即可结束读取，不依赖代理关闭连接。
+    done: bool,
     /// 整个响应的有界字节计数。
     received: usize,
+    /// 在结束事件后仍读取 usage；不保存原始响应或推理正文。
+    pub(crate) metadata: crate::response::Metadata,
 }
 impl Decoder {
     /// 逐行处理完整事件，不把网络截断误判为成功回复。
@@ -53,6 +57,7 @@ impl Decoder {
         let data = std::mem::take(&mut self.data).join("\n");
         if data == "[DONE]" {
             self.finished = true;
+            self.done = true;
             return Ok(());
         }
         let value: Value =
@@ -60,17 +65,19 @@ impl Decoder {
         if value.get("error").is_some() {
             return Err(failure("provider_stream_error", true));
         }
+        self.metadata.observe(&value);
         let Some(choice) = value["choices"]
             .as_array()
             .and_then(|choices| choices.first())
         else {
             return Ok(());
         };
-        if let Some(reason) = choice["finish_reason"].as_str() {
-            if !matches!(reason, "stop" | "tool_calls") {
-                return Err(failure("provider_incomplete_response", false));
-            }
+        if choice["finish_reason"].is_string() {
             self.finished = true;
+        }
+        // 失败事件之后只收集诊断信息，不发布半截内容，也不组装可执行的工具调用。
+        if self.metadata.validate().is_err() {
+            return Ok(());
         }
         let delta = &choice["delta"];
         if let Some(text) = delta["content"].as_str() {
@@ -102,8 +109,14 @@ impl Decoder {
         Ok(())
     }
 
+    /// 用量事件位于 finish_reason 之后、[DONE] 之前，结束时已完成收集。
+    pub(crate) fn is_done(&self) -> bool {
+        self.done
+    }
+
     /// 结束必须有协议标志；半截回复交给重试逻辑，不进入正式历史。
     pub(crate) fn finish(self) -> Result<Value, Failure> {
+        self.metadata.validate()?;
         if !self.finished {
             return Err(failure("provider_stream_interrupted", true));
         }
@@ -150,13 +163,12 @@ mod tests {
             "provider_stream_interrupted"
         );
         let mut decoder = Decoder::default();
-        assert!(
-            decoder
-                .push(
-                    b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
-                    None
-                )
-                .is_err()
-        );
+        decoder
+            .push(
+                b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+                None,
+            )
+            .unwrap();
+        assert_eq!(decoder.finish().unwrap_err().code, "provider_output_limit");
     }
 }

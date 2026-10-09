@@ -238,6 +238,7 @@ npm run preview --workspace @orbit/web
 | `OPENAI_BASE_URL` | 必填，API 根路径，例如 `https://api.openai.com/v1`；程序追加 `/chat/completions` |
 | `OPENAI_MODEL` | 必填，代理实际支持的模型名称 |
 | `OPENAI_API_KEY` | 必填，只存在于服务端 |
+| `AGENT_CHAT_OUTPUT_TOKENS` | 默认 `8192`，范围 `256–16384`；聊天输出超限时仅当前模型请求加倍重试一次，仍受任务总超时限制 |
 | `AGENT_STREAM_ENABLED` | 默认 `true`；仅支持非流式请求的代理可设为 `false` |
 | `AGENT_TOOLS_ENABLED` | 默认 `true`；不支持工具协议的代理可设为 `false` |
 | `PORT` | 默认 `8080`；部署时使用 Railway 注入值 |
@@ -254,7 +255,9 @@ npm run preview --workspace @orbit/web
 | `FEISHU_TOKEN_KEY` | 采集启用时必填，64 位十六进制独立密钥；需与数据库及文件一同安全备份 |
 | `RUST_LOG` | 默认启用应用与 runtime 的 info 级别 JSON 日志 |
 
-模型请求不跟随重定向；如果代理返回重定向，请填写最终 API 根路径。仅更换 model、base URL、API key 无需修改代码，但需要重启服务。上游应支持 `messages`、`max_tokens` 与非流式摘要请求；流式回复采用 Chat Completions SSE 协议，返回完整 JSON 的代理也能接收。若代理拒绝 `stream: true`，设置 `AGENT_STREAM_ENABLED=false`。开启工具时还需支持 `tools` 和 `tool_calls`。
+模型请求不跟随重定向；如果代理返回重定向，请填写最终 API 根路径。仅更换 model、base URL、API key 无需修改代码，但需要重启服务。上游应支持 `messages`、`max_tokens` 与非流式摘要请求；流式回复采用 Chat Completions SSE 协议，返回完整 JSON 的代理也能接收。若代理拒绝 `stream: true`，设置 `AGENT_STREAM_ENABLED=false`。开启工具时还需支持 `tools` 和 `tool_calls`。流式请求通过 `stream_options.include_usage=true` 请求用量；代理未返回 usage 时日志保留未知值。日志仅记录模型、输出预算、结束原因和数字 token 用量，不记录消息、工具参数或推理正文。
+
+聊天明确返回 `finish_reason=length` 时，丢弃当前半截输出并以两倍预算重试一次，保留前序工具结果；不会重跑整个工具循环。再次超限返回 `provider_output_limit`，内容过滤返回 `provider_content_filtered`，未知结束原因仍返回 `provider_incomplete_response`，三者均不触发队列自动重试。此恢复只作用于聊天，后台抽取和沟通整理保持各自预算。调整预算需考虑模型支持的输出上限与费用，并重启服务生效。
 
 ## 飞书接入
 
