@@ -1,6 +1,5 @@
 mod client;
-mod credentials;
-mod oauth;
+mod connection;
 mod queries;
 pub mod routes;
 pub(crate) mod tools;
@@ -14,70 +13,66 @@ use axum::http::StatusCode;
 use serde::Serialize;
 use uuid::Uuid;
 
-// OAuth 回调只使用配置的 API 源，避免模型或请求参数控制凭证发送地址。
-const CALLBACK: &str = "/api/linear/oauth/callback";
-/// 启用 Linear 所需的独立应用配置，不实现 Debug 以防凭证进入日志。
+/// 个人密钥只由服务端环境注入，不实现 Debug，避免凭据进入日志。
 #[derive(Clone)]
 pub struct Config {
-    /// 用户 OAuth 应用 ID。
-    pub client_id: String,
-    /// 仅用于服务端令牌交换的密钥。
-    pub client_secret: String,
-    /// 独立的令牌认证加密密钥。
-    pub token_key: [u8; 32],
+    /// Linear 个人 API Key，权限和可访问团队由供应商控制。
+    pub api_key: String,
     /// 官方 API 根地址；仅测试代码可替换为本地协议夹具。
     pub api_base: String,
-    /// 可选固定工作空间，部署者可限定为 pplabs。
+    /// 可选固定工作空间，防止误连其他工作空间。
     pub workspace_slug: Option<String>,
 }
 impl Config {
-    /// 缺少应用 ID 时关闭能力；部分配置不允许静默启用。
+    /// 未配置个人密钥时关闭能力，不再依赖 OAuth 应用或令牌加密配置。
     pub fn from_env() -> anyhow::Result<Option<Self>> {
-        let id = std::env::var("LINEAR_CLIENT_ID").unwrap_or_default();
-        if id.trim().is_empty() {
+        Self::parse(
+            std::env::var("LINEAR_API_KEY").unwrap_or_default(),
+            std::env::var("LINEAR_WORKSPACE_SLUG").ok(),
+        )
+    }
+    /// 校验密钥能作为单个请求头值使用，错误信息不携带输入。
+    fn parse(api_key: String, workspace_slug: Option<String>) -> anyhow::Result<Option<Self>> {
+        let api_key = api_key.trim().to_owned();
+        if api_key.is_empty() {
             return Ok(None);
         }
-        let secret = std::env::var("LINEAR_CLIENT_SECRET").unwrap_or_default();
-        anyhow::ensure!(!secret.trim().is_empty(), "缺少 LINEAR_CLIENT_SECRET");
-        let key = hex::decode(std::env::var("LINEAR_TOKEN_KEY").unwrap_or_default())
-            .map_err(|_| anyhow::anyhow!("LINEAR_TOKEN_KEY 必须为 64 位十六进制"))?;
+        anyhow::ensure!(
+            api_key.bytes().all(|b| b.is_ascii_graphic()),
+            "LINEAR_API_KEY 格式错误"
+        );
         Ok(Some(Self {
-            client_id: id,
-            client_secret: secret,
-            token_key: key
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("LINEAR_TOKEN_KEY 必须为 64 位十六进制"))?,
+            api_key,
             api_base: "https://api.linear.app".into(),
-            workspace_slug: std::env::var("LINEAR_WORKSPACE_SLUG")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
+            workspace_slug: workspace_slug
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
         }))
     }
+    /// 数据库只保存不可逆摘要；更换密钥后旧连接不能继续使用新凭据。
+    fn fingerprint(&self) -> String {
+        crate::auth::hash(&self.api_key)
+    }
 }
-/// 身份与授权元数据允许展示；密文、令牌和刷新信息不序列化。
+/// 已验证的账号元数据；权限由 Linear 按请求检查，不伪造 OAuth scopes。
 #[derive(Clone, Serialize, sqlx::FromRow)]
 pub(super) struct Connection {
-    /// 重连产生新代次，旧任务不能使用新凭证。
+    /// 每次连接产生新代次，旧任务不能继承新连接。
     generation: Uuid,
-    /// 实际 OAuth 用户，是工具中 me 的唯一来源。
+    /// 身份查询返回的实际用户，是工具中 me 的唯一来源。
     user_id: String,
     /// 可读账号名称。
     user_name: String,
-    /// 实际授权工作空间 ID。
+    /// 实际工作空间 ID。
     workspace_id: String,
     /// 工作空间展示名。
     workspace_name: String,
     /// 用于对照用户提供的 Linear 地址。
     workspace_slug: String,
-    /// 仅令牌刷新层读取的密文。
+    /// 只用于匹配服务端当前密钥，不向浏览器或模型返回。
     #[serde(skip_serializing)]
-    credentials: Vec<u8>,
-    /// 令牌到期时由行锁串行刷新。
-    #[serde(skip_serializing)]
-    expires_at: chrono::DateTime<chrono::Utc>,
-    /// 实际供应商授予的 scopes。
-    scopes: Vec<String>,
-    /// active 或需要重新授权。
+    key_fingerprint: Option<String>,
+    /// active 表示已验证身份；reauthorize 表示密钥失效，需要重新配置并连接。
     status: String,
 }
 /// 缺少配置不能调用任何 Linear 端点。
@@ -88,7 +83,7 @@ fn configured(state: &AppState) -> ApiResult<&Config> {
         .as_ref()
         .ok_or(ApiError(StatusCode::CONFLICT, "linear_disabled"))
 }
-/// 仅返回稳定分类，不泄露上游错误正文或请求凭证。
+/// 只返回稳定分类，不泄露上游错误正文或请求凭证。
 fn unavailable(_: impl std::fmt::Display) -> ApiError {
     ApiError(StatusCode::BAD_GATEWAY, "linear_unavailable")
 }
@@ -96,15 +91,31 @@ fn unavailable(_: impl std::fmt::Display) -> ApiError {
 fn invalid() -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, "invalid_arguments")
 }
-/// 初始只支持管理员独立授权，不默认合并网页、访客和飞书账号。
+/// 个人密钥仅供 Orbit 网页所有者使用，不要求此人在 Linear 中具有管理员角色。
 async fn connection(state: &AppState, owner: &str) -> ApiResult<Option<Connection>> {
-    if owner != "admin" || state.config.linear.is_none() {
+    if owner != "admin" {
         return Ok(None);
     }
-    Ok(
-        sqlx::query_as("SELECT * FROM linear_connections WHERE owner=$1 AND status='active'")
-            .bind(owner)
-            .fetch_optional(&state.pool)
-            .await?,
-    )
+    Ok(connection::current(state)
+        .await?
+        .filter(|row| row.status == "active"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 验证纯配置解析，不修改进程环境；不验证真实密钥或供应商权限。
+    #[test]
+    fn personal_key_configuration() {
+        assert!(Config::parse("  ".into(), None).unwrap().is_none());
+        let config = Config::parse(" fixture-key ".into(), Some(" pplabs ".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.api_key, "fixture-key");
+        assert_eq!(config.workspace_slug.as_deref(), Some("pplabs"));
+        assert_ne!(config.fingerprint(), config.api_key);
+        assert!(Config::parse("key\r\nInjected: value".into(), None).is_err());
+        assert!(Config::parse("key with space".into(), None).is_err());
+    }
 }

@@ -89,9 +89,6 @@ pub(super) async fn execute(
     token: &str,
     args: Value,
 ) -> ApiResult<Value> {
-    if !connection.scopes.iter().any(|scope| scope == "write") {
-        return Err(ApiError(StatusCode::FORBIDDEN, "linear_write_forbidden"));
-    }
     let input: Update = serde_json::from_value(args).map_err(|_| invalid())?;
     if input.evidence.chars().count() < 2
         || !inputs.iter().any(|text| text.contains(&input.evidence))
@@ -148,7 +145,13 @@ pub(super) async fn execute(
     }
     let mut tx = state.pool.begin().await?;
     // 与断开和重连共用连接锁；落盘后请求才可能发送，之后取消不能撤回平台已接受的修改。
-    let allowed:Option<Uuid>=sqlx::query_scalar("SELECT generation FROM linear_connections WHERE owner='admin' AND generation=$1 AND status='active' AND 'write'=ANY(scopes) FOR UPDATE").bind(connection.generation).fetch_optional(&mut *tx).await?;
+    let allowed: Option<Uuid> = sqlx::query_scalar(
+        "SELECT generation FROM linear_connections WHERE owner='admin' AND generation=$1 AND status='active' AND key_fingerprint=$2 FOR UPDATE",
+    )
+    .bind(connection.generation)
+    .bind(&connection.key_fingerprint)
+    .fetch_optional(&mut *tx)
+    .await?;
     if allowed.is_none() {
         return Err(ApiError(StatusCode::CONFLICT, "linear_connection_changed"));
     }
@@ -182,6 +185,17 @@ pub(super) async fn execute(
             (
                 "confirmed",
                 json!({"status":"confirmed","issue":data["issueUpdate"]["issue"],"changed_fields":input.patch.as_object().expect("已验证补丁").keys().collect::<Vec<_>>()}),
+            )
+        }
+        Err(error)
+            if matches!(
+                error.1,
+                "linear_invalid_key" | "linear_permission_denied" | "linear_rate_limited"
+            ) =>
+        {
+            (
+                "rejected",
+                json!({"status":"rejected","issue_id":id,"error":error.1,"retry_safe":false}),
             )
         }
         _ => (

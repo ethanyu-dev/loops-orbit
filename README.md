@@ -301,18 +301,20 @@ docker run --rm -p 5173:8080 -e API_ORIGIN=http://localhost:8080 orbit-web:local
 
 ## Linear 连接与 issue 工具
 
-管理员从工作空间菜单打开「外部连接」，通过 Linear OAuth 绑定自己的账号。部署前在 Linear 创建 OAuth 应用，回调地址填写 `API_PUBLIC_URL/api/linear/oauth/callback`，例如本地 `http://localhost:8080/api/linear/oauth/callback`。服务端配置：
+个人助手使用 Linear Personal API Key，无需创建 OAuth 应用或拥有 Linear 工作空间管理员权限。在 Linear 的 [Settings → Account → Security & Access](https://linear.app/settings/account/security) 创建个人密钥，选择 Read、Write 权限，并限定需要访问的团队。工作空间必须允许成员创建 API Key；没有创建入口时请管理员开启 Member API keys。权限说明见 [Linear 官方文档](https://linear.app/docs/api-and-webhooks)。
+
+仅在服务端配置：
 
 ```dotenv
-LINEAR_CLIENT_ID=你的应用ID
-LINEAR_CLIENT_SECRET=你的应用密钥
-LINEAR_TOKEN_KEY=独立生成的64位十六进制密钥
+LINEAR_API_KEY=你的个人APIKey
 LINEAR_WORKSPACE_SLUG=pplabs
 ```
 
-`LINEAR_TOKEN_KEY` 可使用 `openssl rand -hex 32` 生成，必须与数据库一起妥善保管；直接替换会使已有连接无法解密，需要重新授权。`LINEAR_WORKSPACE_SLUG` 可留空；配置为 `pplabs` 时拒绝连接其他工作空间。不设置 `LINEAR_CLIENT_ID` 则禁用整个能力。数据库迁移 `0015_linear.sql` 随 API 启动执行。前后端生产地址继续遵守前述同站点部署要求。
+`LINEAR_API_KEY` 留空时关闭能力；`LINEAR_WORKSPACE_SLUG` 可留空，配置为 `pplabs` 时拒绝连接其他工作空间。重启服务端后，Orbit 网页所有者从工作空间菜单打开「外部连接」，点击「验证并连接」。服务端通过固定身份查询确认实际账号和工作空间，只保存身份、连接代次和密钥摘要；密钥不会存入数据库、返回浏览器或交给模型。身份验证不会试写，也不能证明密钥拥有 Write 权限；每次查询或更新的权限及团队范围最终由 Linear 判断。
 
-默认申请 read；勾选「允许按我的明确指令更新 issues」才申请 write，最终以供应商实际授予的 scopes 为准。连接绑定实际 Linear 用户和工作空间，只对网页管理员开放，访客、飞书聊天和后台任务不继承此授权。切换账号或工作空间前需断开旧连接。OAuth state 同时绑定浏览器、原管理员会话和 PKCE，凭证以 AES-GCM 加密保存；刷新通过数据库行锁串行处理。断开禁用后续工具调用并尝试向供应商撤销令牌，不删除历史回答，也不能撤回已派发的修改。
+这里的 Orbit 网页所有者是使用本项目管理员登录的个人用户，不要求其在 Linear 中拥有管理员角色。访客、飞书聊天和后台任务不继承个人密钥。更换密钥或工作空间限制后，需要重启服务端并重新验证连接；旧工具实例不能继承新连接。多实例部署需使用一致的配置。断开只禁用 Orbit 中的连接，不吊销个人密钥，也不能撤回已派发的修改；密钥吊销请在 Linear 的个人安全设置中操作。
+
+从旧 OAuth 版本升级时，启动会执行迁移 `0018_linear_personal_key.sql`，保留历史操作记录。原 `LINEAR_CLIENT_ID`、`LINEAR_CLIENT_SECRET`、`LINEAR_TOKEN_KEY` 不再使用；旧 OAuth 连接不会自动启用，需要配置个人密钥并重新连接。重新连接会清除连接行中的旧令牌密文；旧 OAuth 授权请在 Linear 的 Authorized applications 中自行撤销。
 
 连接后可直接问「分配给我的 issues 有哪些」，或明确要求「把 ENG-123 的优先级改为高」。四个工具通过渐进式目录发现、加载，不会在每轮默认发送全部定义：
 
@@ -323,11 +325,11 @@ LINEAR_WORKSPACE_SLUG=pplabs
 | `linear_team_metadata` | 分页查询团队、状态或成员，获取修改需要的真实 ID。 |
 | `linear_issue_update` | 修改标题、完整描述、优先级、状态或负责人；省略字段保持原样，负责人 null 表示清空。 |
 
-本人列表对应授权账号的 assignee 条件，不复刻 Linear 网页保存的筛选和排序偏好。首版不支持创建、删除、评论或任意 GraphQL。提示词要求明确用户指令，服务端校验真实输入片段、当前任务租约、连接代次、权限和字段白名单；片段校验不能独立证明自然语言授权语义。更新前对比 `updatedAt` 仅为尽力冲突检测，不能保证外部原子条件更新。
+本人列表对应授权账号的 assignee 条件，不复刻 Linear 网页保存的筛选和排序偏好。首版不支持创建、删除、评论或任意 GraphQL。提示词要求明确用户指令，服务端校验真实输入片段、当前任务租约、连接代次、密钥摘要和字段白名单；片段校验不能独立证明自然语言授权语义。更新前对比 `updatedAt` 仅为尽力冲突检测，不能保证外部原子条件更新。
 
-每次更新派发前保存操作记录，同一任务、连接代次、issue 和补丁不会重复发送。平台响应丢失或进程中断时返回 `unknown`，不自动重试写入；只有验证成功响应才返回 `confirmed`。再次读取可以确认当前状态，但不能证明此前请求是否执行成功。网络调用有超时及响应体上限，HTTP 200 的 GraphQL errors 同样按失败处理，HTTP 400 的 `RATELIMITED` 按限流处理。
+每次更新派发前保存操作记录，同一任务、连接代次、issue 和补丁不会重复发送。平台响应丢失或进程中断时返回 `unknown`，不自动重试写入；只有验证成功响应才返回 `confirmed`。明确的认证、权限或限流拒绝返回 `rejected`，不冒充未知结果或成功，也不自动重发。再次读取可以确认当前状态，但不能证明此前请求是否执行成功。网络调用有超时及响应体上限，HTTP 200 的 GraphQL errors 同样按失败处理，HTTP 400 的 `RATELIMITED` 按限流处理。
 
-协议依据 Linear 官方 [OAuth 文档](https://linear.app/developers/oauth-2-0-authentication)、[GraphQL 文档](https://linear.app/developers/graphql)和[限流说明](https://linear.app/developers/rate-limiting)。集成测试使用真实 PostgreSQL 与本地 OAuth/GraphQL 夹具，覆盖浏览器绑定、回调重放、刷新串行化与失效、凭证篡改、分页、更新去重、未知结果和断开期间的响应围栏；不代表真实 Linear 账号、授权页或模型语义验收。
+协议依据 Linear 官方 [GraphQL 与个人密钥文档](https://linear.app/developers/graphql)和[限流说明](https://linear.app/developers/rate-limiting)。集成测试使用真实 PostgreSQL 与本地 GraphQL 夹具，覆盖个人密钥请求头、身份与工作空间校验、密钥失效和更换、权限拒绝、分页、更新去重、未知结果和断开期间的响应围栏；不代表真实 Linear 账号、团队权限或模型语义验收。
 
 ## 认证与临时链接
 

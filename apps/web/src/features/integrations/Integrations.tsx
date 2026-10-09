@@ -1,42 +1,31 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../api';
-import { apiUrl } from '../../config';
 import { Spinner } from '../../components/Feedback';
 
-/** 只展示连接身份和权限，浏览器不会获取 OAuth 令牌。 */
+/** 只展示连接身份与状态，浏览器不会获取个人 API Key。 */
 type Status = {
   configured: boolean;
   connection: null | {
     user_name: string;
     workspace_name: string;
     workspace_slug: string;
-    scopes: string[];
     status: string;
   };
 };
 
-/** 管理员在明确选择权限后进入供应商授权页，聊天使用绑定账号执行工具。 */
+/** Orbit 所有者验证服务端配置的个人密钥，聊天使用实际账号执行工具。 */
 export function Integrations({ report }: { report: (error: unknown) => void }) {
   const [status, setStatus] = useState<Status | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [write, setWrite] = useState(false);
-  const [notice, setNotice] = useState(() => {
-    const outcome = new URLSearchParams(window.location.search).get('linear');
-    if (outcome === 'connected') return 'Linear 账号已连接。可以在对话中查询分配给你的 issues。';
-    if (outcome === 'account_changed')
-      return '授权账号或工作空间与已有连接不符。切换账号前请先断开连接。';
-    if (outcome === 'failed') return '授权未完成，请检查应用配置后重新连接。';
-    return '';
-  });
+  const [notice, setNotice] = useState('');
   useEffect(() => {
     let active = true;
     api<Status>('/linear/status')
       .then((value) => {
         if (active) {
           setStatus(value);
-          setWrite(value.connection?.scopes.includes('write') ?? false);
         }
       })
       .catch((error) => {
@@ -49,32 +38,29 @@ export function Integrations({ report }: { report: (error: unknown) => void }) {
       active = false;
     };
   }, [report]);
-  /** 仅跳转服务端生成的供应商授权地址，不把令牌写入浏览器存储。 */
+  /** 验证密钥对应的身份；密钥由部署环境管理，网页不读取或提交密钥。 */
   async function connect() {
     setBusy(true);
+    setNotice('');
     try {
-      const result = await api<{ url: string }>('/linear/oauth/start', {
-        method: 'POST',
-        body: JSON.stringify({ write }),
-      });
-      window.location.assign(result.url);
+      await api('/linear/connection', { method: 'POST' });
+      setStatus(await api<Status>('/linear/status'));
+      setNotice('Linear 账号已连接。可以在对话中查询或按明确指令更新 issues。');
     } catch (error) {
       report(error);
+    } finally {
       setBusy(false);
     }
   }
-  /** 断开立即禁用本地工具；平台撤销失败会明确提示进一步处理。 */
+  /** 断开只禁用 Orbit 连接，个人密钥需在 Linear 中自行撤销。 */
   async function disconnect() {
     setBusy(true);
+    setNotice('');
     try {
-      const result = await api<{ provider_revoked: boolean }>('/linear/connection', {
-        method: 'DELETE',
-      });
+      await api('/linear/connection', { method: 'DELETE' });
       setStatus(await api<Status>('/linear/status'));
       setNotice(
-        result.provider_revoked
-          ? '已断开 Linear 并撤销授权。已发出的更新可能仍会完成。'
-          : '本地连接已断开。未确认平台撤销，请到 Linear 的授权设置检查；已发出的更新可能仍会完成。',
+        '已断开 Orbit 中的连接。若需撤销个人 API Key，请到 Linear 操作；已发出的更新可能仍会完成。',
       );
     } catch (error) {
       report(error);
@@ -105,29 +91,21 @@ export function Integrations({ report }: { report: (error: unknown) => void }) {
                 {status.connection.workspace_slug}）
               </p>
               <p>
-                {status.connection.status === 'active' ? '已连接' : '需要重新授权'} ·{' '}
-                {status.connection.scopes.includes('write') ? '允许查询和更新 issues' : '只读查询'}
+                {status.connection.status === 'active'
+                  ? '已连接'
+                  : '密钥失效，请检查配置后重新连接'}
               </p>
             </>
           ) : (
             <p>连接后可以询问“分配给我的 issues 有哪些”。</p>
           )}
           {!status.configured ? (
-            <p>服务端尚未配置 Linear 应用。请按项目 README 配置后再连接。</p>
+            <p>服务端尚未配置 Linear 个人 API Key。请按下方说明配置后再连接。</p>
           ) : (
             <>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={write}
-                  onChange={(event) => setWrite(event.target.checked)}
-                  disabled={busy}
-                />{' '}
-                允许按我的明确指令更新 issues
-              </label>
               <div className="connection-actions">
                 <button className="primary-button" disabled={busy} onClick={() => void connect()}>
-                  {busy ? '处理中…' : status.connection ? '重新授权' : '连接 Linear'}
+                  {busy ? '处理中…' : status.connection ? '重新验证连接' : '验证并连接'}
                 </button>
                 {status.connection && (
                   <button
@@ -142,15 +120,19 @@ export function Integrations({ report }: { report: (error: unknown) => void }) {
             </>
           )}
           <p className="page-description">
-            连接仅供网页管理员使用，访客和飞书聊天不会继承该账号。修改权限以 Linear
-            实际授予的范围为准。
+            查询和更新范围由你的个人 API Key 权限及团队访问范围决定，无需 Linear 管理员权限。
+            连接仅供 Orbit 网页所有者使用，访客和飞书聊天不会继承该账号。
           </p>
           <details>
-            <summary>应用配置说明</summary>
+            <summary>个人 API Key 配置说明</summary>
             <p>
-              OAuth 回调地址：<code>{apiUrl('/linear/oauth/callback')}</code>
+              在 Linear 的 Settings → Account → Security &amp; Access 中创建个人 API Key， 选择 Read
+              和 Write 权限及需要访问的团队。若没有创建权限，需工作空间管理员开启成员 API Key 功能。
             </p>
-            <p>切换到其他账号或工作空间前先断开现有连接。</p>
+            <p>
+              在服务端设置 <code>LINEAR_API_KEY</code> 后重启，再点击「验证并连接」。 可选设置{' '}
+              <code>LINEAR_WORKSPACE_SLUG</code> 限定工作空间。 更换密钥后需要重新验证连接。
+            </p>
           </details>
         </section>
       )}

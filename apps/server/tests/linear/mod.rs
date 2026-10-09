@@ -14,41 +14,16 @@ struct Fixture {
     issue: Value,
     /// 实际写请求计数，验证不会重复派发。
     updates: usize,
-    /// 刷新计数，验证行锁串行刷新。
-    refreshes: usize,
-    /// 授权是否具有 write。
+    /// 模拟供应商是否允许更新，不伪造本地可知的权限范围。
     write: bool,
     /// normal、unknown、partial、rate 等可控故障。
     mode: String,
     /// 捕获固定 GraphQL 文档及变量，不包含请求凭证。
     requests: Vec<Value>,
-    /// 暂停网络响应，确定性验证断开与在途回调的交错。
+    /// 暂停网络响应，确定性验证断开与在途验证的交错。
     entered: Arc<tokio::sync::Notify>,
     /// 测试完成本地撤销后恢复供应商响应。
     release: Arc<tokio::sync::Notify>,
-}
-/// 令牌端点验证交换参数，并可模拟刷新失效。
-async fn token_fixture(
-    axum::extract::State(fixture): axum::extract::State<Arc<Mutex<Fixture>>>,
-    body: String,
-) -> axum::response::Response {
-    let url = reqwest::Url::parse(&format!("https://fixture.invalid/?{body}")).unwrap();
-    let fields: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-    assert_eq!(fields["client_id"], "fixture-linear-app");
-    let mut f = fixture.lock().unwrap();
-    if fields["grant_type"] == "refresh_token" {
-        f.refreshes += 1;
-    } else {
-        assert_eq!(fields["code_verifier"].len(), 64);
-    }
-    if f.mode == "invalid_grant" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"invalid_grant"})),
-        )
-            .into_response();
-    }
-    Json(json!({"access_token":"fixture-linear-access","refresh_token":"fixture-linear-refresh","expires_in":86400,"scope":if f.write {"read write"}else{"read"}})).into_response()
 }
 /// 固定文档协议夹具，暂停点位于响应前，便于构造撤销竞态。
 async fn graphql_fixture(
@@ -56,7 +31,10 @@ async fn graphql_fixture(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> axum::response::Response {
-    assert_eq!(headers["authorization"], "Bearer fixture-linear-access");
+    assert!(matches!(
+        headers["authorization"].to_str().unwrap(),
+        "fixture-linear-key" | "fixture-rotated-key"
+    ));
     let pause = {
         let f = fixture.lock().unwrap();
         (f.mode == "pause").then(|| (f.entered.clone(), f.release.clone()))
@@ -69,6 +47,16 @@ async fn graphql_fixture(
     f.requests.push(body.clone());
     let query = body["query"].as_str().unwrap();
     let vars = &body["variables"];
+    if f.mode == "invalid_key" {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"敏感密钥错误"})),
+        )
+            .into_response();
+    }
+    if f.mode == "forbidden" {
+        return (StatusCode::FORBIDDEN, Json(json!({"error":"敏感权限错误"}))).into_response();
+    }
     if f.mode == "rate" {
         return (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"rate"}))).into_response();
     }
@@ -104,6 +92,12 @@ async fn graphql_fixture(
     } else if query.contains("OrbitLinearUser(") {
         json!({"user":{"id":USER,"active":true,"organization":{"id":WORKSPACE}}})
     } else if query.contains("OrbitLinearUpdate") {
+        if !f.write {
+            return Json(
+                json!({"errors":[{"message":"敏感权限错误","extensions":{"code":"FORBIDDEN"}}]}),
+            )
+            .into_response();
+        }
         f.updates += 1;
         for (key, value) in vars["input"].as_object().unwrap() {
             if ["title", "description", "priority"].contains(&key.as_str()) {
@@ -111,6 +105,9 @@ async fn graphql_fixture(
             }
         }
         f.issue["updatedAt"] = json!("2026-10-08T08:01:00Z");
+        if f.mode == "partial_update" {
+            return Json(json!({"data":{"issueUpdate":{"success":true,"issue":f.issue}},"errors":[{"extensions":{"code":"FORBIDDEN"}}]})).into_response();
+        }
         if f.mode == "unknown" {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -124,13 +121,12 @@ async fn graphql_fixture(
     };
     Json(json!({"data":data})).into_response()
 }
-/// 全部 OAuth 和 GraphQL 请求只发给环回协议夹具。
+/// GraphQL 请求只发给环回协议夹具，没有 OAuth 或刷新端点。
 async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) {
     let mut h = Harness::new().await;
     let fixture = Arc::new(Mutex::new(Fixture {
         issue: json!({"id":ISSUE,"identifier":"ENG-123","title":"初始任务","description":"保留的说明","url":"https://linear.app/pplabs/issue/ENG-123","updatedAt":"2026-10-08T08:00:00Z","priority":3,"state":{"id":STATE,"name":"Todo","type":"unstarted"},"assignee":{"id":USER,"name":"测试用户"},"team":{"id":TEAM,"name":"工程","key":"ENG"}}),
         updates: 0,
-        refreshes: 0,
         write: true,
         mode: "normal".into(),
         requests: vec![],
@@ -138,14 +134,6 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         release: Arc::new(tokio::sync::Notify::new()),
     }));
     let app = Router::new()
-        .route("/oauth/token", post(token_fixture))
-        .route(
-            "/oauth/revoke",
-            post(|body: String| async move {
-                assert!(body.contains("token=fixture-linear-refresh"));
-                StatusCode::OK
-            }),
-        )
         .route("/graphql", post(graphql_fixture))
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -155,9 +143,7 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
     });
     let mut config = (*h.state.config).clone();
     config.linear = Some(orbit_server::linear::Config {
-        client_id: "fixture-linear-app".into(),
-        client_secret: "fixture-linear-secret".into(),
-        token_key: [19; 32],
+        api_key: "fixture-linear-key".into(),
         api_base: format!("http://{address}"),
         workspace_slug: Some("pplabs".into()),
     });
@@ -165,44 +151,19 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
     h.app = router(h.state.clone());
     (h, fixture, server)
 }
-/// 发起真实生产路由并提取专用回调 Cookie，不伪造连接数据。
-async fn start(h: &Harness, cookie: &str) -> (String, String) {
-    let (status, browser, result) = h
-        .request(
-            "POST",
-            "/api/linear/oauth/start",
-            Some(cookie),
-            json!({"write":true}),
-        )
+/// 通过生产路由验证身份，不伪造数据库连接行，也不使用真实账号。
+async fn connect(h: &Harness, cookie: &str) {
+    let (status, _, result) = h
+        .request("POST", "/api/linear/connection", Some(cookie), json!({}))
         .await;
     assert_eq!(status, StatusCode::OK, "{result}");
-    let url = reqwest::Url::parse(result["url"].as_str().unwrap()).unwrap();
-    let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-    assert_eq!(pairs["code_challenge_method"], "S256");
-    assert_eq!(pairs["scope"], "read,write");
-    assert_eq!(pairs["actor"], "user");
-    (
-        browser.unwrap(),
-        format!(
-            "/api/linear/oauth/callback?state={}&code=fixture",
-            pairs["state"]
-        ),
-    )
-}
-/// 通过浏览器绑定回调完成连接，仅访问本地供应商夹具。
-async fn connect(h: &Harness, cookie: &str) {
-    let (browser, callback) = start(h, cookie).await;
-    assert_eq!(
-        h.request("GET", &callback, Some(&browser), Value::Null)
-            .await
-            .0,
-        StatusCode::SEE_OTHER
-    );
     let (_, _, status) = h
         .request("GET", "/api/linear/status", Some(cookie), Value::Null)
         .await;
     assert_eq!(status["connection"]["workspace_slug"], "pplabs", "{status}");
-    assert!(!status.to_string().contains("fixture-linear-access"));
+    assert!(!status.to_string().contains("fixture-linear-key"));
+    assert!(status["connection"].get("key_fingerprint").is_none());
+    assert!(status["connection"].get("scopes").is_none());
 }
 /// 创建当前管理员任务及租约，用真实输入作为修改证据。
 async fn job(h: &Harness, cookie: &str) -> worker::Job {
@@ -228,52 +189,37 @@ fn update_args() -> Value {
     json!({"issue":"ENG-123","expected_updated_at":"2026-10-08T08:00:00Z","evidence":"把 ENG-123 的标题改为完成，优先级改为高","patch":{"title":"完成","priority":2}})
 }
 
-// 验证 OAuth 浏览器绑定、PKCE、state 一次性及断开围栏；不验证真实 Linear 授权页或 TLS。
+// 验证个人密钥连接、仅存摘要及断开，不验证真实平台账号或密钥吊销。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn oauth_browser_binding_replay_and_disconnect() {
+async fn personal_key_connection_and_disconnect() {
     let (h, _, server) = setup().await;
     let cookie = h.login().await;
-    let (browser, callback) = start(&h, &cookie).await;
-    assert_eq!(
-        h.request(
-            "GET",
-            &callback,
-            Some("orbit_linear_oauth=wrong"),
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        h.request("GET", &callback, Some(&browser), Value::Null)
-            .await
-            .0,
-        StatusCode::SEE_OTHER
-    );
-    assert_eq!(
-        h.request("GET", &callback, Some(&browser), Value::Null)
-            .await
-            .0,
-        StatusCode::BAD_REQUEST
-    );
-    let bytes: Vec<u8> = sqlx::query_scalar("SELECT credentials FROM linear_connections")
-        .fetch_one(&h.state.pool)
-        .await
-        .unwrap();
-    assert!(!String::from_utf8_lossy(&bytes).contains("fixture-linear-access"));
-    let (browser, callback) = start(&h, &cookie).await;
+    connect(&h, &cookie).await;
+    let row: (
+        Option<Vec<u8>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        String,
+        Vec<String>,
+    ) = sqlx::query_as(
+        "SELECT credentials,expires_at,key_fingerprint,scopes FROM linear_connections",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert!(row.0.is_none());
+    assert!(row.1.is_none());
+    assert_eq!(row.2, auth::hash("fixture-linear-key"));
+    assert!(row.3.is_empty());
     let (_, _, removed) = h
         .request("DELETE", "/api/linear/connection", Some(&cookie), json!({}))
         .await;
-    assert_eq!(removed["provider_revoked"], true);
-    assert_eq!(
-        h.request("GET", &callback, Some(&browser), Value::Null)
-            .await
-            .0,
-        StatusCode::BAD_REQUEST
-    );
+    assert_eq!(removed["disconnected"], true);
+    assert!(removed.get("provider_revoked").is_none());
+    let (_, _, status) = h
+        .request("GET", "/api/linear/status", Some(&cookie), Value::Null)
+        .await;
+    assert!(status["connection"].is_null());
     server.abort();
     h.close().await;
 }
@@ -382,65 +328,65 @@ async fn updates_are_scoped_and_deduplicated() {
     h.close().await;
 }
 
-// 模拟平台已修改而响应失败，验证未知结果不会重新发送；不依赖真实服务网络故障。
+// 模拟平台已修改而响应失败或出现字段级拒绝，验证未知结果不会重发；不依赖真实服务网络故障。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn unknown_update_outcome_never_replays() {
-    let (h, f, server) = setup().await;
-    let cookie = h.login().await;
-    connect(&h, &cookie).await;
-    let job = job(&h, &cookie).await;
-    let host = Host::new(&h.state, &job).await.unwrap();
-    f.lock().unwrap().mode = "unknown".into();
-    assert_eq!(
-        host.execute("linear_issue_update", update_args()).await["status"],
-        "unknown"
-    );
-    assert_eq!(
-        host.execute("linear_issue_update", update_args()).await["retry_safe"],
-        false
-    );
-    assert_eq!(f.lock().unwrap().updates, 1);
-    let value = host
-        .execute("linear_issue_get", json!({"issue":"ENG-123"}))
-        .await;
-    assert_eq!(value["issue"]["title"], "完成");
-    drop(host);
-    server.abort();
-    h.close().await;
+    for mode in ["unknown", "partial_update"] {
+        let (h, f, server) = setup().await;
+        let cookie = h.login().await;
+        connect(&h, &cookie).await;
+        let job = job(&h, &cookie).await;
+        let host = Host::new(&h.state, &job).await.unwrap();
+        f.lock().unwrap().mode = mode.into();
+        assert_eq!(
+            host.execute("linear_issue_update", update_args()).await["status"],
+            "unknown"
+        );
+        assert_eq!(
+            host.execute("linear_issue_update", update_args()).await["retry_safe"],
+            false
+        );
+        assert_eq!(f.lock().unwrap().updates, 1);
+        let value = host
+            .execute("linear_issue_get", json!({"issue":"ENG-123"}))
+            .await;
+        assert_eq!(value["issue"]["title"], "完成");
+        drop(host);
+        server.abort();
+        h.close().await;
+    }
 }
 
-// 验证只读授权不发现写工具、其他身份隔离、刷新串行化与重连代次；不覆盖外部账号合并。
+// 验证供应商只读权限拒绝、身份隔离及重连代次；不声称本地能提前发现真实密钥权限。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn scopes_refresh_and_connection_boundaries() {
+async fn permissions_and_connection_boundaries() {
     let (h, f, server) = setup().await;
     let cookie = h.login().await;
     f.lock().unwrap().write = false;
     connect(&h, &cookie).await;
     let job = job(&h, &cookie).await;
     let host = Host::new(&h.state, &job).await.unwrap();
-    assert!(
-        !host
-            .catalog()
-            .iter()
-            .any(|tool| tool.name == "linear_issue_update")
+    let result = host.execute("linear_issue_update", update_args()).await;
+    assert_eq!(result["status"], "rejected", "{result}");
+    assert_eq!(result["error"], "linear_permission_denied");
+    assert!(!result.to_string().contains("敏感"));
+    assert_eq!(f.lock().unwrap().updates, 0);
+    assert_eq!(
+        host.execute("linear_issue_update", update_args()).await,
+        result
     );
     assert_eq!(
-        host.execute("linear_issue_update", update_args()).await["error"],
-        "unknown_tool"
+        f.lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|r| r["query"].as_str().unwrap().contains("OrbitLinearUpdate"))
+            .count(),
+        1
     );
-    sqlx::query("UPDATE linear_connections SET expires_at=now()-interval '1 second'")
-        .execute(&h.state.pool)
-        .await
-        .unwrap();
-    let (a, b) = tokio::join!(
-        host.execute("linear_issue_list", json!({})),
-        host.execute("linear_issue_list", json!({}))
-    );
-    assert!(a["items"].is_array(), "{a}");
-    assert!(b["items"].is_array());
-    assert_eq!(f.lock().unwrap().refreshes, 1);
+    assert!(host.execute("linear_issue_list", json!({})).await["items"].is_array());
     for owner in ["guest:other", "feishu:ou_allowed"] {
         sqlx::query("UPDATE conversations SET owner=$2 WHERE id=$1")
             .bind(job.conversation_id)
@@ -466,20 +412,19 @@ async fn scopes_refresh_and_connection_boundaries() {
     h.close().await;
 }
 
-// 验证在途 OAuth 回调不能恢复已断开的连接、在途读结果被撤销围栏丢弃；不承诺撤回已经发送的写请求。
+// 验证在途密钥验证不能恢复已断开的连接、在途读结果被撤销围栏丢弃；不承诺撤回已经发送的写请求。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn disconnect_fences_inflight_callback_and_read() {
+async fn disconnect_fences_inflight_validation_and_read() {
     let (h, f, server) = setup().await;
     let cookie = h.login().await;
-    let (browser, callback) = start(&h, &cookie).await;
     let (entered, release) = {
         let mut f = f.lock().unwrap();
         f.mode = "pause".into();
         (f.entered.clone(), f.release.clone())
     };
     let (response, _) = tokio::join!(
-        h.request("GET", &callback, Some(&browser), Value::Null),
+        h.request("POST", "/api/linear/connection", Some(&cookie), json!({})),
         async {
             entered.notified().await;
             h.request("DELETE", "/api/linear/connection", Some(&cookie), json!({}))
@@ -487,7 +432,7 @@ async fn disconnect_fences_inflight_callback_and_read() {
             release.notify_one();
         }
     );
-    assert_eq!(response.0, StatusCode::SEE_OTHER);
+    assert_eq!(response.0, StatusCode::CONFLICT);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM linear_connections")
         .fetch_one(&h.state.pool)
         .await
@@ -511,23 +456,32 @@ async fn disconnect_fences_inflight_callback_and_read() {
     h.close().await;
 }
 
-// 验证刷新令牌失效后禁用目录、密文篡改不发起查询；只验证本地协议和认证加密，不验证真实平台吊销传播。
+// 验证失效密钥禁用工具、权限不足仍可保留连接；只模拟供应商响应，不验证真实吊销传播。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn invalid_refresh_and_corrupt_credentials_fail_closed() {
+async fn invalid_key_and_forbidden_are_distinct() {
     let (h, f, server) = setup().await;
     let cookie = h.login().await;
     connect(&h, &cookie).await;
     let job = job(&h, &cookie).await;
     let host = Host::new(&h.state, &job).await.unwrap();
-    sqlx::query("UPDATE linear_connections SET expires_at=now()-interval '1 second'")
-        .execute(&h.state.pool)
-        .await
-        .unwrap();
-    f.lock().unwrap().mode = "invalid_grant".into();
+    f.lock().unwrap().mode = "forbidden".into();
     assert_eq!(
         host.execute("linear_issue_list", json!({})).await["error"],
-        "linear_reauthorize"
+        "linear_permission_denied"
+    );
+    assert!(
+        Host::new(&h.state, &job)
+            .await
+            .unwrap()
+            .catalog()
+            .iter()
+            .any(|tool| tool.provider == "linear")
+    );
+    f.lock().unwrap().mode = "invalid_key".into();
+    assert_eq!(
+        host.execute("linear_issue_list", json!({})).await["error"],
+        "linear_invalid_key"
     );
     let unavailable = Host::new(&h.state, &job).await.unwrap();
     assert!(
@@ -536,21 +490,131 @@ async fn invalid_refresh_and_corrupt_credentials_fail_closed() {
             .iter()
             .any(|tool| tool.provider == "linear")
     );
+    let (_, _, status) = h
+        .request("GET", "/api/linear/status", Some(&cookie), Value::Null)
+        .await;
+    assert_eq!(status["connection"]["status"], "reauthorize");
     drop(unavailable);
     drop(host);
-    f.lock().unwrap().mode = "normal".into();
+    server.abort();
+    h.close().await;
+}
+
+// 验证更换密钥后必须重连，旧实例和旧工具不能继承新账号；不模拟多实例配置分发。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn key_rotation_fences_old_instances() {
+    let (h, f, server) = setup().await;
+    let cookie = h.login().await;
     connect(&h, &cookie).await;
+    let job = job(&h, &cookie).await;
     let host = Host::new(&h.state, &job).await.unwrap();
-    sqlx::query("UPDATE linear_connections SET credentials=set_byte(credentials,12,get_byte(credentials,12)#1)").execute(&h.state.pool).await.unwrap();
-    let before = f.lock().unwrap().requests.len();
+    let mut config = (*h.state.config).clone();
+    config.linear.as_mut().unwrap().api_key = "fixture-rotated-key".into();
+    let rotated = AppState::new(config, h.state.pool.clone()).unwrap();
     assert!(
-        host.execute("linear_issue_list", json!({}))
+        Host::new(&rotated, &job)
             .await
-            .get("error")
-            .is_some()
+            .unwrap()
+            .catalog()
+            .iter()
+            .all(|tool| tool.provider != "linear")
+    );
+    let app = router(rotated.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/linear/connection")
+        .header("cookie", &cookie)
+        .header("origin", ORIGIN)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::OK);
+    assert!(
+        Host::new(&rotated, &job)
+            .await
+            .unwrap()
+            .execute("linear_issue_list", json!({}))
+            .await["items"]
+            .is_array()
+    );
+    let before = f.lock().unwrap().requests.len();
+    assert_eq!(
+        host.execute("linear_issue_update", update_args()).await["error"],
+        "linear_connection_changed"
     );
     assert_eq!(f.lock().unwrap().requests.len(), before);
     drop(host);
+    server.abort();
+    h.close().await;
+}
+
+// 验证缺失配置、错误工作空间、旧 OAuth 行及未登录访问不会启用工具；不访问真实 Linear。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn configuration_and_legacy_connection_boundaries() {
+    let (mut h, f, server) = setup().await;
+    let cookie = h.login().await;
+    assert_eq!(
+        h.request("POST", "/api/linear/connection", None, json!({}))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut config = (*h.state.config).clone();
+    config.linear.as_mut().unwrap().workspace_slug = Some("another-workspace".into());
+    h.state = AppState::new(config.clone(), h.state.pool.clone()).unwrap();
+    h.app = router(h.state.clone());
+    assert_eq!(
+        h.request("POST", "/api/linear/connection", Some(&cookie), json!({}))
+            .await
+            .2["error"],
+        "linear_workspace_mismatch"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM linear_connections")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    config.linear.as_mut().unwrap().workspace_slug = None;
+    h.state = AppState::new(config.clone(), h.state.pool.clone()).unwrap();
+    h.app = router(h.state.clone());
+    connect(&h, &cookie).await;
+    // 模拟升级后保留的旧 OAuth 行，摘要为空时不能继承历史授权。
+    sqlx::query("UPDATE linear_connections SET key_fingerprint=NULL,credentials=$1,expires_at=now(),scopes=ARRAY['read','write']")
+        .bind(b"legacy-encrypted-token".to_vec()).execute(&h.state.pool).await.unwrap();
+    let job = job(&h, &cookie).await;
+    assert!(
+        Host::new(&h.state, &job)
+            .await
+            .unwrap()
+            .catalog()
+            .iter()
+            .all(|tool| tool.provider != "linear")
+    );
+    connect(&h, &cookie).await;
+    let credentials: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT credentials FROM linear_connections")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert!(credentials.is_none());
+    config.linear = None;
+    h.state = AppState::new(config, h.state.pool.clone()).unwrap();
+    h.app = router(h.state.clone());
+    let before = f.lock().unwrap().requests.len();
+    let status = h
+        .request("GET", "/api/linear/status", Some(&cookie), Value::Null)
+        .await
+        .2;
+    assert_eq!(status["configured"], false);
+    assert!(status["connection"].is_null());
+    assert_eq!(
+        h.request("POST", "/api/linear/connection", Some(&cookie), json!({}))
+            .await
+            .2["error"],
+        "linear_disabled"
+    );
+    assert_eq!(f.lock().unwrap().requests.len(), before);
     server.abort();
     h.close().await;
 }

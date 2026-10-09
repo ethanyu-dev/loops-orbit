@@ -2,9 +2,11 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
-  linear_disabled: '服务端尚未配置 Linear 应用。',
-  linear_oauth_invalid: '授权回调已失效，请在当前浏览器重新连接。',
-  linear_reauthorize: 'Linear 授权已失效，请重新连接。',
+  linear_disabled: '服务端尚未配置 LINEAR_API_KEY。',
+  linear_invalid_key: 'Linear 个人 API Key 已失效，请检查服务端配置后重新连接。',
+  linear_permission_denied: 'Linear 拒绝访问，请检查个人 API Key 权限及团队访问范围。',
+  linear_workspace_mismatch: '个人 API Key 的工作空间与 LINEAR_WORKSPACE_SLUG 不一致。',
+  linear_connection_changed: 'Linear 连接已变更，请刷新页面后重试。',
   linear_rate_limited: 'Linear 请求较频繁，请稍后再试。',
   linear_unavailable: 'Linear 暂时不可用，请稍后重试。',
 
