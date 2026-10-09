@@ -1,4 +1,7 @@
-use super::super::{client, subscription::valid_chat};
+use super::{
+    super::{client, subscription::valid_chat},
+    AGENT_PREFIX,
+};
 use crate::{
     AppState,
     error::{ApiError, ApiResult},
@@ -8,8 +11,8 @@ use serde_json::json;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-// 提示也使用固定前缀，防止首次同步时被当成测试问题。
-const NOTICE: &str = "[agent] 正在绑定自聊测试。请在问题接管页确认保存成功后，再在此发送新问题；回答仅使用已发布的通用知识。";
+// 提示正文与回复共用同一个前缀，防止标识改动后遗漏防循环。
+const NOTICE: &str = "正在绑定自聊测试。请在问题接管页确认保存成功后，再在此发送新问题；回答仅使用已发布的通用知识。";
 
 /// 接收者固定为 OAuth 已验证的本人，不能由会话名称、历史发言或前端参数推断。
 /// 只有用户在设置页显式开启时发送提示；失败时不开启，也不自动重试发送。
@@ -17,7 +20,7 @@ pub(super) async fn bind(state: &AppState, open_id: &str, token: &str) -> ApiRes
     let base = &state.config.feishu.as_ref().expect("已验证配置").api_base;
     let sent = client::json_response(state.http.post(format!("{base}/im/v1/messages"))
         .bearer_auth(token).query(&[("receive_id_type", "open_id")])
-        .json(&json!({"receive_id":open_id,"msg_type":"text","content":json!({"text":NOTICE}).to_string(),"uuid":Uuid::new_v4().to_string()})))
+        .json(&json!({"receive_id":open_id,"msg_type":"text","content":json!({"text":format!("{AGENT_PREFIX}{NOTICE}")}).to_string(),"uuid":Uuid::new_v4().to_string()})))
         .await?;
     let data = &sent["data"];
     // 检查实际发送身份，避免应用身份的机器人会话被误绑定为本人自聊。

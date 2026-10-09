@@ -50,7 +50,12 @@ async fn review_diagnostics_preserve_draft_score_and_original_threshold() {
             }
         } else {
             assert_eq!(f.lock().unwrap().sent.len(), 1);
-            assert!(job["answer"].as_str().unwrap().starts_with("[agent] "));
+            assert!(
+                job["answer"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("[Agent 自动回复]\n")
+            );
         }
         server.abort();
         h.close().await;
