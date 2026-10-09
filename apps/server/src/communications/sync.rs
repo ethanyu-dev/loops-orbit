@@ -36,7 +36,7 @@ pub async fn initialize_scope(state: &AppState) -> ApiResult<()> {
     }
     Ok(())
 }
-/// 独立采集 worker 不创建 runs，不发送聊天回复；每次一页给其他来源留出机会。
+/// 采集与显式启用的接管各有独立循环；每次一页给其他来源留出机会。
 pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
     // 独立循环共享关闭信号，慢摘要或 embedding 不阻塞消息同步。
     tokio::join!(
@@ -48,7 +48,8 @@ pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
         work_loop(&state, stop.clone(), 5),
         work_loop(&state, stop.clone(), 6),
         work_loop(&state, stop.clone(), 7),
-        work_loop(&state, stop, 8)
+        work_loop(&state, stop.clone(), 8),
+        work_loop(&state, stop, 9)
     );
 }
 /// 每条循环只执行一种工作；故障统一退避，避免上游中断时快速重试。
@@ -73,7 +74,8 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
                     7 => super::private_subscription::step(state)
                         .await
                         .map(|_| false),
-                    _ => super::removal_jobs::step(state).await,
+                    8 => super::removal_jobs::step(state).await,
+                    _ => super::takeover::step(state).await.map(|_| false),
                 }
             };
             let result = tokio::select! { result=work=>result, _=stop.changed()=>return };
@@ -206,13 +208,22 @@ pub(super) async fn page(
         }
     }
     for (day, messages) in days {
-        commit_day(state, source, &day, messages).await?;
+        commit_day(state, source, &day, messages.clone()).await?;
+        if history_job.is_none() && mode == "p2p" {
+            super::takeover::enqueue(state, source, connection_version, &messages).await?;
+        }
     }
+    let takeover: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_takeover_settings WHERE owner='admin' AND enabled)").fetch_one(&state.pool).await?;
+    let sync_seconds = if takeover && mode == "p2p" {
+        super::takeover::POLL_SECONDS
+    } else {
+        SYNC_SECONDS
+    };
     if let Some((job, _)) = history_job {
         sqlx::query("UPDATE communication_history_jobs SET page_token=$2,status=$3,error=NULL,pages_processed=pages_processed+1,last_progress_at=now(),next_attempt=now()+CASE WHEN $3='complete' THEN interval '1 day' ELSE interval '2 seconds' END WHERE id=$1").bind(job).bind(if more {next} else {""}).bind(if more {"running"} else {"complete"}).execute(&state.pool).await?;
     } else {
         sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")
-        .bind(source.id).bind(if more {source.window_start} else {None}).bind(if more {source.window_end} else {None}).bind(if more {next} else {""}).bind(more).bind(source.window_end.unwrap_or(source.watermark)).bind(if more {1.0} else {SYNC_SECONDS as f64}).bind(source.window_start==Some(source.start_at)).bind(source.version).execute(&state.pool).await?;
+        .bind(source.id).bind(if more {source.window_start} else {None}).bind(if more {source.window_end} else {None}).bind(if more {next} else {""}).bind(more).bind(source.window_end.unwrap_or(source.watermark)).bind(if more {1.0} else {sync_seconds as f64}).bind(source.window_start==Some(source.start_at)).bind(source.version).execute(&state.pool).await?;
     }
     Ok(())
 }

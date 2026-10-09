@@ -20,6 +20,10 @@ use uuid::Uuid;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(index))
+        .route(
+            "/takeover",
+            get(super::takeover::read).put(super::takeover::save),
+        )
         .route("/library/days", get(super::library::days))
         .route("/library/files", get(super::library::files))
         .route("/history", post(super::history::batch))

@@ -15,6 +15,9 @@ pub(super) struct Tokens {
     pub access_token: String,
     /// 可轮换的刷新令牌。
     pub refresh_token: String,
+    /// 飞书实际授予范围；旧密文默认无发送授权。
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 /// 将密文绑定到应用和唯一数据所有者，不能移植到另一应用配置。
 fn aad(state: &AppState) -> String {

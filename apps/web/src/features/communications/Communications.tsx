@@ -7,6 +7,7 @@ import { HistoryImport } from './HistoryImport';
 import './history.css';
 import { SourceManager } from './SourceManager';
 import { ConnectionCard } from './ConnectionCard';
+import { Takeover } from './Takeover';
 import { Spinner } from '../../components/Feedback';
 import { DocumentView } from './DocumentView';
 import { DocumentLibrary } from './DocumentLibrary';
@@ -22,9 +23,11 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
   const selected = documentId && CONVERSATION_ID.test(documentId) ? documentId : null;
   const section = pathname.startsWith('/communications/sources')
     ? 'sources'
-    : pathname.startsWith('/communications/sync')
-      ? 'sync'
-      : 'records';
+    : pathname.startsWith('/communications/takeover')
+      ? 'takeover'
+      : pathname.startsWith('/communications/sync')
+        ? 'sync'
+        : 'records';
   const [historyRevision, setHistoryRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState<string | null>(null);
@@ -77,9 +80,12 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
       />
     );
   if (
-    !['/communications/records', '/communications/sync', '/communications/sources'].includes(
-      pathname,
-    )
+    ![
+      '/communications/records',
+      '/communications/sync',
+      '/communications/sources',
+      '/communications/takeover',
+    ].includes(pathname)
   )
     return (
       <div className="settings-page">
@@ -137,10 +143,12 @@ export function Communications({ report }: { report: (e: unknown) => void }) {
               <nav className="communication-tabs" aria-label="飞书资料分区">
                 <NavLink to="/communications/records">沟通记录</NavLink>
                 <NavLink to="/communications/sync">历史导入与进度</NavLink>
+                <NavLink to="/communications/takeover">问题接管</NavLink>
                 <NavLink to="/communications/sources">
                   订阅管理 · {data.sources.filter((source) => source.subscribed !== false).length}
                 </NavLink>
               </nav>
+              {section === 'takeover' && <Takeover report={report} />}
               {section === 'sources' && <SourceManager data={data} reload={load} report={report} />}
               {section === 'sync' && (
                 <div className="sync-workspace">

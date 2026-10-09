@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 WORKDIR /app
 RUN mkdir -p /app/memory && chown orbit:orbit /app/memory
 COPY --from=server /build/target/release/orbit-server /usr/local/bin/orbit-server
+COPY config/takeover-questions.json /app/config/takeover-questions.json
 ENV PORT=8080 MEMORY_DIR=/app/memory
 USER orbit
 EXPOSE 8080

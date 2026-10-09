@@ -250,6 +250,19 @@ impl Runtime {
             .map_err(|_| failure("invalid_followup_decision", true))
     }
 
+    /// 接管仅起草结构化答案，不继承管理员聊天工具或个人对话上下文。
+    pub async fn takeover_answer(&self, input: &Value) -> Result<Value, Failure> {
+        let messages = vec![
+            json!({"role":"system","content":include_str!("../prompts/takeover_answer.md")}),
+            json!({"role":"user","content":input.to_string()}),
+        ];
+        let answer = self
+            .complete_extra(&messages, None, false, Vec::new(), 4096)
+            .await?;
+        serde_json::from_str(answer["content"].as_str().unwrap_or(""))
+            .map_err(|_| failure("invalid_takeover_answer", false))
+    }
+
     /// 图片以真正的多模态内容块传入；不把私有资源链接伪装成模型已看过的图片。
     pub async fn describe_communication_image(
         &self,

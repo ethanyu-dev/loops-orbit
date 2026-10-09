@@ -21,6 +21,10 @@ async fn oauth_uses_api_origin_and_returns_to_frontend() {
         params["redirect_uri"],
         "http://localhost:8080/api/communications/oauth/callback"
     );
+    // 授权 URL 申请发送权限，实际是否获得权限仍以 token 响应为准。
+    let scopes: Vec<_> = params["scope"].split_whitespace().collect();
+    assert!(scopes.contains(&"im:message"));
+    assert!(scopes.contains(&"im:message.send_as_user"));
     let response = h
         .app
         .clone()
