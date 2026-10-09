@@ -122,7 +122,7 @@ export function RemoveSubscriptionDialog({
       )}
       <p className={deleteDocuments ? 'subscription-delete-warning' : 'subscription-keep-note'}>
         {deleteDocuments
-          ? '删除后无法撤销，飞书中的原始消息不受影响。'
+          ? '提交后在后台删除，可关闭页面并查看进度。删除无法撤销，飞书中的原始消息不受影响。'
           : '资料会保留在沟通记录中，移除后不再参与内容检索。'}
       </p>
       {error && (

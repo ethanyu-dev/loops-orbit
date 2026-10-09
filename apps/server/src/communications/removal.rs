@@ -1,4 +1,4 @@
-use super::{configured, dependencies, routes};
+use super::{configured, dependencies, removal_jobs};
 use crate::{
     AppState,
     auth::Identity,
@@ -52,13 +52,17 @@ pub(super) struct RemoveRequest {
     delete_documents: bool,
 }
 
-/// 磁盘删除无法回滚，部分失败必须返回并保留可重试的暂停来源。
+/// 删除返回持久化任务标识，物理清理结果通过状态快照查询。
 #[derive(Serialize)]
 pub(super) struct RemoveResult {
-    /// 成功移除的数量。
+    /// 已移除订阅数量；异步删除尚未完成时为零。
     removed: usize,
     /// 清理失败、仍显示在管理列表中的来源。
     failed_ids: Vec<Uuid>,
+    /// 已受理的后台删除任务，仅删除资料时存在。
+    job_id: Option<Uuid>,
+    /// 已入队的来源数量，不代表已经物理删除。
+    queued: usize,
 }
 
 /// 先对整批来源设围栏、取消历史任务，再保留或清理资料；不修改飞书原始消息或授权。
@@ -66,7 +70,7 @@ pub(super) async fn remove(
     State(state): State<AppState>,
     identity: Identity,
     Json(input): Json<RemoveRequest>,
-) -> ApiResult<Json<RemoveResult>> {
+) -> ApiResult<(StatusCode, Json<RemoveResult>)> {
     identity.require_admin()?;
     configured(&state)?;
     let _guard = state.communications.lock().await;
@@ -91,7 +95,7 @@ pub(super) async fn remove(
                 .collect::<Vec<_>>()
         }
         Selection::One { id, version } => {
-            let current: Option<i64> = sqlx::query_scalar("SELECT version FROM communication_sources WHERE id=$1 AND owner='admin' FOR UPDATE")
+            let current: Option<i64> = sqlx::query_scalar("SELECT version FROM communication_sources WHERE id=$1 AND owner='admin' AND NOT removal_pending FOR UPDATE")
                 .bind(id).fetch_optional(&mut *tx).await?;
             if current != Some(version) {
                 return Err(ApiError(
@@ -112,37 +116,45 @@ pub(super) async fn remove(
         }
     };
     if ids.is_empty() {
-        return Ok(Json(RemoveResult {
-            removed: 0,
-            failed_ids: vec![],
-        }));
+        return Ok((
+            StatusCode::OK,
+            Json(RemoveResult {
+                removed: 0,
+                failed_ids: vec![],
+                job_id: None,
+                queued: 0,
+            }),
+        ));
     }
     sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=ANY($1) ON CONFLICT DO NOTHING")
         .bind(&ids).execute(&mut *tx).await?;
-    sqlx::query("UPDATE communication_sources SET enabled=false,version=version+1,page_token='',window_start=NULL,window_end=NULL,error=NULL WHERE id=ANY($1)")
+    sqlx::query("UPDATE communication_sources SET enabled=false,subscribed=false,version=version+1,page_token='',window_start=NULL,window_end=NULL,error=NULL WHERE id=ANY($1)")
         .bind(&ids).execute(&mut *tx).await?;
     sqlx::query("UPDATE communication_history_jobs SET status='cancelled',version=version+1,page_token='',error=NULL WHERE source_id=ANY($1) AND status<>'cancelled'")
         .bind(&ids).execute(&mut *tx).await?;
-    tx.commit().await?;
-    for id in &ids {
-        dependencies::cancel(&state, None, Some(*id)).await?;
-    }
-    dependencies::invalidate_context(&state).await?;
-    let mut failed_ids = vec![];
     if input.delete_documents {
-        for id in &ids {
-            if routes::erase_files(&state, *id).await.is_err() {
-                failed_ids.push(*id);
-            }
-        }
-    } else {
-        sqlx::query("UPDATE communication_sources SET subscribed=false WHERE id=ANY($1)")
-            .bind(&ids)
-            .execute(&state.pool)
-            .await?;
+        let job = removal_jobs::enqueue(&mut tx, &ids).await?;
+        tx.commit().await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(RemoveResult {
+                removed: 0,
+                failed_ids: vec![],
+                job_id: Some(job),
+                queued: ids.len(),
+            }),
+        ));
     }
-    Ok(Json(RemoveResult {
-        removed: ids.len() - failed_ids.len(),
-        failed_ids,
-    }))
+    tx.commit().await?;
+    dependencies::cancel_sources(&state, &ids).await?;
+    dependencies::invalidate_context(&state).await?;
+    Ok((
+        StatusCode::OK,
+        Json(RemoveResult {
+            removed: ids.len(),
+            failed_ids: vec![],
+            job_id: None,
+            queued: 0,
+        }),
+    ))
 }

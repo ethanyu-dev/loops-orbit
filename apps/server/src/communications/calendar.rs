@@ -17,7 +17,7 @@ pub(super) fn day(timestamp: i64) -> ApiResult<String> {
 pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
     let _guard = state.communications.lock().await;
     let source: Option<Source> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE day_timezone='UTC' LIMIT 1"
+        "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE day_timezone='UTC' AND NOT removal_pending LIMIT 1"
     )))
     .fetch_optional(&state.pool)
     .await?;

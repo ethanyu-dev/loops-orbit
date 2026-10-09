@@ -12,6 +12,7 @@ mod oauth;
 pub mod private_subscription;
 pub mod progress;
 mod removal;
+pub mod removal_jobs;
 mod retained;
 pub mod routes;
 pub(crate) mod search;
@@ -73,6 +74,8 @@ pub struct Source {
     pub day_timezone: String,
     /// 已移除的订阅保留文件元数据，重新添加后才恢复采集。
     pub subscribed: bool,
+    /// 已受理的后台删除期间禁止重新订阅或重复清理。
+    pub removal_pending: bool,
     /// 暂停后不采集、不召回、不支持旧跟进。
     pub enabled: bool,
     /// 变更围栏，用于丢弃在途采集结果。
@@ -97,7 +100,7 @@ pub struct Source {
     /// 脱敏故障分类。
     pub error: Option<String>,
 }
-pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,day_timezone,subscribed,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
+pub(super) const SOURCE_COLUMNS: &str = "id,chat_id,label,day_timezone,subscribed,removal_pending,enabled,version,start_at,watermark,window_start,window_end,page_token,audit_at,next_sync,last_synced_at,error";
 
 /// 当前文件指针；正文读取时仍要校验哈希。
 #[derive(Clone, Serialize, sqlx::FromRow)]

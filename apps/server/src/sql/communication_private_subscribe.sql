@@ -15,4 +15,4 @@ ON CONFLICT(owner,chat_id) DO UPDATE SET
     window_end = NULL,
     error = NULL,
     next_sync = now()
-WHERE NOT communication_sources.subscribed
+WHERE NOT communication_sources.subscribed AND NOT communication_sources.removal_pending
