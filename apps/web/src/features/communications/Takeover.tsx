@@ -168,7 +168,7 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
         <p>
           仅处理已订阅私聊的新文字消息。Jev
           判断是否属于你允许的问题，现有模型仅使用你已发布的通用知识回答，不读取私人记忆或其他会话原文。无法完整回答时保持静默，每条回复固定带有{' '}
-          <strong>[agent]</strong> 标识。
+          <strong>[Agent 自动回复]</strong> 标识。
         </p>
         <p>
           接管期间以约 15

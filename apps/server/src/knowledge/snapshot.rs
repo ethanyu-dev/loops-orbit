@@ -18,7 +18,7 @@ pub(super) async fn from_documents(state: &AppState, docs: &[Document]) -> ApiRe
             if message.deleted
                 || message.sender_type != "user"
                 || message.text.trim().is_empty()
-                || message.text.trim_start().starts_with("[agent]")
+                || crate::communications::takeover::is_agent_message(&message.text)
             {
                 continue;
             }

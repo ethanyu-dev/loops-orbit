@@ -42,7 +42,7 @@ fn eligible(message: &Message, since_ms: i64, now: i64, self_test: bool) -> bool
         && message.message_type == "text"
         && !message.text.trim().is_empty()
         && message.text.chars().count() <= MAX_INPUT_CHARS
-        && !message.text.trim_start().starts_with("[agent]")
+        && !super::is_agent_message(&message.text)
         && message.create_time >= since_ms
         && message.create_time >= now - MAX_AGE_MS
         && message.create_time <= now
@@ -283,7 +283,13 @@ mod tests {
         message.sender_type = "app".into();
         assert!(!eligible(&message, 0, now, false));
         message.sender_type = "user".into();
-        message.text = "[agent] 申请 novita 测试环境权限".into();
-        assert!(!eligible(&message, 0, now, false));
+        // 新旧标识均排除，包含前导空白以及自聊测试放行本人消息的路径。
+        for prefix in ["[agent] ", "[Agent 自动回复]\n", "  [Agent 自动回复]\n"] {
+            message.text = format!("{prefix}申请 novita 测试环境权限");
+            message.is_me = false;
+            assert!(!eligible(&message, 0, now, false));
+            message.is_me = true;
+            assert!(!eligible(&message, 0, now, true));
+        }
     }
 }

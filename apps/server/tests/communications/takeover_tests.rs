@@ -216,7 +216,10 @@ async fn takeover_sends_once_as_user_with_agent_marker() {
         assert_eq!(f.sent.len(), 1);
         assert_eq!(f.decisions.len(), 2);
         let content: Value = serde_json::from_str(f.sent[0]["content"].as_str().unwrap()).unwrap();
-        assert!(content["text"].as_str().unwrap().starts_with("[agent] "));
+        assert_eq!(
+            content["text"],
+            "[Agent 自动回复]\n请提交申请表，填写测试用途，由环境管理员审核。"
+        );
         assert!(f.sent[0]["uuid"].as_str().is_some());
     }
     server.abort();
@@ -687,7 +690,12 @@ async fn takeover_self_chat_uses_external_flow_without_reply_loop() {
         assert_eq!(f.bindings.len(), 1);
         let notice: Value =
             serde_json::from_str(f.bindings[0]["content"].as_str().unwrap()).unwrap();
-        assert!(notice["text"].as_str().unwrap().starts_with("[agent]"));
+        assert!(
+            notice["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("[Agent 自动回复]\n")
+        );
         assert_eq!(f.sent.len(), 1);
         assert_eq!(f.decisions.len(), 2);
         f.message["message_id"] = json!("om_agent_reply");
