@@ -84,7 +84,9 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
                     _ => crate::rag::index::vectors_step(state).await,
                 }
             };
-            let result = tokio::select! { result=work=>result, _=stop.changed()=>return };
+            // 不在任意数据库 await 点取消步骤：取消 BEGIN 可能把未清理事务的连接归还池，
+            // 令后续请求看似成功却未提交。停止只阻止下一步；主进程仍有整体退出上限。
+            let result = work.await;
             match result {
                 Ok(true) if kind == 0 || kind == 8 => delay = ACTIVE_SYNC_DELAY_MS,
                 Err(error) => {
