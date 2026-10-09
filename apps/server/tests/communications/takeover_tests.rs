@@ -5,6 +5,8 @@ use orbit_server::communications::takeover;
 struct TakeoverFixture {
     /// 被采集的原始消息。
     message: Value,
+    /// 使用较早的本人消息提供沟通知识，覆盖文档版本复核。
+    communication_knowledge: bool,
     /// 匹配概率与复核概率独立，验证两道关口。
     match_probability: f64,
     /// 知识支持概率。
@@ -36,6 +38,7 @@ async fn setup_takeover() -> (
     let at = chrono::Utc::now().timestamp_millis() - 4000;
     let fixture = Arc::new(Mutex::new(TakeoverFixture {
         message: json!({"message_id":"om_question","chat_id":"oc_fixture","sender":{"id":"ou_other","id_type":"open_id","sender_type":"user"},"create_time":at.to_string(),"update_time":at.to_string(),"msg_type":"text","body":{"content":json!({"text":"怎么申请 novita 测试环境权限？"}).to_string()}}),
+        communication_knowledge: false,
         match_probability: 0.98,
         review_probability: 0.98,
         unanswerable: false,
@@ -59,6 +62,16 @@ async fn setup_takeover() -> (
             assert_eq!(headers["authorization"],"Bearer fixture-personal-token");
             let f=f.lock().unwrap();
             let mut items=vec![f.message.clone()];
+            if f.communication_knowledge {
+                let mut knowledge = f.message.clone();
+                knowledge["message_id"] = json!("om_knowledge");
+                knowledge["sender"]["id"] = json!("ou_allowed");
+                let at = f.message["create_time"].as_str().unwrap().parse::<i64>().unwrap() - 1000;
+                knowledge["create_time"] = json!(at.to_string());
+                knowledge["update_time"] = json!(at.to_string());
+                knowledge["body"]["content"] = json!(json!({"text":"申请 novita 测试环境权限：提交申请表，填写测试用途，由环境管理员审核。"}).to_string());
+                items.push(knowledge);
+            }
             if f.owner_replied && query.get("sort_type").is_some_and(|v|v=="ByCreateTimeDesc") {
                 let mut own=f.message.clone();own["message_id"]=json!("om_owner_reply");own["sender"]["id"]=json!("ou_allowed");own["create_time"]=json!(chrono::Utc::now().timestamp_millis().to_string());items.push(own);
             }
@@ -558,6 +571,28 @@ async fn takeover_invalid_file_pauses_without_interrupting_collection_and_recove
         StatusCode::OK
     );
     assert!(f.lock().unwrap().sent.is_empty());
+    server.abort();
+    h.close().await;
+}
+
+// 验证真实沟通原文检索和新增摘要字段下的版本复核；协议及模型仍为夹具，不代表真实租户投递验收。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn takeover_answers_from_communication_evidence_with_current_document_schema() {
+    let (h, f, server) = setup_takeover().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    add(&h, &cookie).await;
+    enable(&h, &cookie).await;
+    f.lock().unwrap().communication_knowledge = true;
+    communications::sync::step(&h.state).await.unwrap();
+    takeover::step(&h.state).await.unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM communication_takeover_jobs")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "sent");
+    assert_eq!(f.lock().unwrap().sent.len(), 1);
     server.abort();
     h.close().await;
 }
