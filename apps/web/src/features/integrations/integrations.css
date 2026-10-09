@@ -1,0 +1,428 @@
+/* 页面样式独立于其他功能的懒加载样式，避免访问顺序改变连接页布局。 */
+.integrations-page {
+  max-width: 1000px;
+}
+.integration-page-header {
+  display: grid;
+  gap: 12px;
+}
+.integration-page-header .page-description {
+  margin: 0;
+}
+.integration-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin-bottom: 8px;
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--muted);
+}
+.integration-back:hover {
+  color: var(--text);
+}
+.integration-feedback-slot {
+  margin-top: 28px;
+}
+.integration-feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.integration-feedback > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.integration-feedback span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.integration-feedback button {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border-radius: 4px;
+}
+.integration-feedback.is-success {
+  background: var(--success-bg);
+  color: var(--green);
+}
+.integration-feedback.is-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.integration-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg);
+  padding: 28px;
+}
+.integration-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.integration-provider {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+.integration-provider-icon {
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+}
+.integration-provider h2 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.integration-provider p {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.integration-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 20px;
+  padding: 5px 10px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.integration-badge > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.integration-badge.is-connected {
+  color: var(--green);
+  background: var(--success-bg);
+}
+.integration-badge.is-warning {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.integration-identity {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin: 26px 0 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.integration-identity > div {
+  min-width: 0;
+}
+.integration-identity dt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.integration-identity dd {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.integration-identity dd span {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.integration-example {
+  margin-top: 25px;
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.integration-example > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.integration-example p {
+  margin-top: 7px;
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.6;
+}
+.integration-example small {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.integration-intro {
+  margin: 28px 0;
+}
+.integration-intro h3 {
+  font-size: 16px;
+  font-weight: 500;
+}
+.integration-intro p {
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.integration-warning {
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-top: 20px;
+}
+.integration-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 25px;
+}
+.integration-button {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  text-decoration: none;
+}
+.integration-button:hover:not(:disabled) {
+  background: var(--raised);
+}
+.integration-button-primary {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.integration-button-primary:hover:not(:disabled) {
+  color: var(--on-accent);
+  background: var(--accent);
+  opacity: 0.85;
+}
+.integration-disconnect {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 8px 0 8px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.integration-disconnect:hover:not(:disabled) {
+  color: var(--danger);
+}
+.integration-scope {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.integration-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 200px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.integration-help {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.integration-help summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  list-style: none;
+}
+.integration-help summary::-webkit-details-marker {
+  display: none;
+}
+.integration-help summary > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.integration-help summary > span {
+  flex: 1;
+}
+.integration-help summary small {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.integration-chevron {
+  transition: transform 0.15s;
+}
+.integration-help[open] .integration-chevron {
+  transform: rotate(180deg);
+}
+.integration-help summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+.integration-help-content {
+  padding: 0 22px 22px;
+  border-top: 1px solid var(--line);
+}
+.integration-help ol {
+  display: grid;
+  gap: 20px;
+  padding-left: 22px;
+  margin: 22px 0;
+}
+.integration-help li {
+  padding-left: 5px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.integration-help li::marker {
+  color: var(--muted);
+}
+.integration-help strong {
+  font-weight: 500;
+}
+.integration-help li p {
+  color: var(--muted);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.integration-help a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  text-underline-offset: 3px;
+}
+.integration-help code {
+  font-size: 12px;
+  color: var(--secondary);
+}
+.integration-help-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.9;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+/* 原生 dialog 的焦点约束与取消行为在两种主题下保持一致。 */
+.integration-dialog {
+  width: min(440px, calc(100% - 32px));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 28px;
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: 0 18px 70px #00000025;
+}
+.integration-dialog::backdrop {
+  background: #00000060;
+}
+.integration-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  margin-bottom: 18px;
+}
+.integration-dialog h2 {
+  font-size: 19px;
+  font-weight: 600;
+}
+.integration-dialog p {
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--secondary);
+}
+.integration-dialog .integration-dialog-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.integration-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 25px;
+}
+.integration-button-danger {
+  color: var(--on-accent);
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.integration-button-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-accent);
+  opacity: 0.85;
+}
+@media (max-width: 600px) {
+  .integration-card {
+    padding: 20px;
+  }
+  .integration-identity {
+    gap: 18px;
+  }
+  .integration-actions {
+    gap: 8px;
+  }
+  .integration-disconnect {
+    width: 100%;
+    margin-left: 0;
+    padding-left: 0;
+    justify-content: flex-start;
+  }
+  .integration-example {
+    padding: 14px;
+  }
+  .integration-help summary {
+    padding: 16px;
+  }
+  .integration-help-content {
+    padding: 0 16px 18px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .integration-chevron {
+    transition: none;
+  }
+}

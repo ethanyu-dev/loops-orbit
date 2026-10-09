@@ -1,144 +1,200 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../../api';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  CircleAlert,
+  Link2,
+  RefreshCw,
+  Unplug,
+  X,
+} from 'lucide-react';
 import { Spinner } from '../../components/Feedback';
+import { ConnectionHelp } from './ConnectionHelp';
+import { DisconnectDialog } from './DisconnectDialog';
+import { useLinearConnection } from './useLinearConnection';
+import './integrations.css';
 
-/** 只展示连接身份与状态，浏览器不会获取个人 API Key。 */
-type Status = {
-  configured: boolean;
-  connection: null | {
-    user_name: string;
-    workspace_name: string;
-    workspace_slug: string;
-    status: string;
-  };
-};
-
-/** Orbit 所有者验证服务端配置的个人密钥，聊天使用实际账号执行工具。 */
+/** 连接状态、主要操作和按需帮助分层展示，权限最终仍由服务端及 Linear 检查。 */
 export function Integrations({ report }: { report: (error: unknown) => void }) {
-  const [status, setStatus] = useState<Status | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState('');
-  useEffect(() => {
-    let active = true;
-    api<Status>('/linear/status')
-      .then((value) => {
-        if (active) {
-          setStatus(value);
-        }
-      })
-      .catch((error) => {
-        if (active) {
-          setFailed(true);
-          report(error);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [report]);
-  /** 验证密钥对应的身份；密钥由部署环境管理，网页不读取或提交密钥。 */
-  async function connect() {
-    setBusy(true);
-    setNotice('');
-    try {
-      await api('/linear/connection', { method: 'POST' });
-      setStatus(await api<Status>('/linear/status'));
-      setNotice('Linear 账号已连接。可以在对话中查询或按明确指令更新 issues。');
-    } catch (error) {
-      report(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-  /** 断开只禁用 Orbit 连接，个人密钥需在 Linear 中自行撤销。 */
+  const { status, loading, action, feedback, refresh, run, clearFeedback } =
+    useLinearConnection(report);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const connected = status?.configured && status.connection?.status === 'active';
+  const needsAttention = status?.configured && status.connection && !connected;
+  const busy = action !== null || loading;
+  const stateLabel = !status?.configured
+    ? '待配置'
+    : connected
+      ? '已连接'
+      : needsAttention
+        ? '需检查'
+        : '待连接';
+
+  /** 失败保留现有账号状态，并关闭确认框使用户能立即看到具体错误。 */
   async function disconnect() {
-    setBusy(true);
-    setNotice('');
-    try {
-      await api('/linear/connection', { method: 'DELETE' });
-      setStatus(await api<Status>('/linear/status'));
-      setNotice(
-        '已断开 Orbit 中的连接。若需撤销个人 API Key，请到 Linear 操作；已发出的更新可能仍会完成。',
-      );
-    } catch (error) {
-      report(error);
-    } finally {
-      setBusy(false);
-    }
+    await run('disconnect');
+    setConfirmDisconnect(false);
   }
+
   return (
-    <div className="settings-page">
-      <h1>外部连接</h1>
-      <p className="page-description">连接工作账号，在对话中查询资料或按你的指令更新事项。</p>
-      {notice && (
-        <p className="page-description" role="status">
-          {notice}
-        </p>
-      )}
-      {failed ? (
-        <p role="status">连接状态加载失败，请刷新页面重试。</p>
-      ) : !status ? (
-        <Spinner />
-      ) : (
-        <section className="settings-card">
-          <h2>Linear</h2>
-          {status.connection ? (
-            <>
-              <p>
-                {status.connection.user_name} · {status.connection.workspace_name}（
-                {status.connection.workspace_slug}）
-              </p>
-              <p>
-                {status.connection.status === 'active'
-                  ? '已连接'
-                  : '密钥失效，请检查配置后重新连接'}
-              </p>
-            </>
-          ) : (
-            <p>连接后可以询问“分配给我的 issues 有哪些”。</p>
+    <div className="settings-page integrations-page">
+      <header className="integration-page-header">
+        <Link to="/chat" className="integration-back">
+          <ArrowLeft size={15} aria-hidden="true" />
+          返回对话
+        </Link>
+        <h1>外部连接</h1>
+        <p className="page-description">连接你的工作账号，在对话中查询任务、更新进展。</p>
+      </header>
+
+      <div className="integration-feedback-slot">
+        {feedback && (
+          <div
+            className={`integration-feedback is-${feedback.tone}`}
+            role={feedback.tone === 'error' ? 'alert' : 'status'}
+          >
+            {feedback.tone === 'error' ? (
+              <CircleAlert size={17} aria-hidden="true" />
+            ) : (
+              <CheckCircle2 size={17} aria-hidden="true" />
+            )}
+            <span>{feedback.text}</span>
+            <button aria-label="关闭提示" onClick={clearFeedback}>
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      <section className="integration-card" aria-labelledby="linear-heading" aria-busy={busy}>
+        <div className="integration-card-header">
+          <div className="integration-provider">
+            <span className="integration-provider-icon">
+              <Link2 size={24} aria-hidden="true" />
+            </span>
+            <div>
+              <h2 id="linear-heading">Linear</h2>
+              <p>项目与任务</p>
+            </div>
+          </div>
+          {status && !loading && (
+            <span
+              className={`integration-badge ${connected ? 'is-connected' : needsAttention ? 'is-warning' : ''}`}
+            >
+              <span />
+              {stateLabel}
+            </span>
           )}
-          {!status.configured ? (
-            <p>服务端尚未配置 Linear 个人 API Key。请按下方说明配置后再连接。</p>
-          ) : (
-            <>
-              <div className="connection-actions">
-                <button className="primary-button" disabled={busy} onClick={() => void connect()}>
-                  {busy ? '处理中…' : status.connection ? '重新验证连接' : '验证并连接'}
-                </button>
-                {status.connection && (
-                  <button
-                    className="secondary-button"
-                    disabled={busy}
-                    onClick={() => void disconnect()}
-                  >
-                    断开连接
-                  </button>
-                )}
+        </div>
+
+        {loading ? (
+          <div className="integration-placeholder" role="status">
+            <Spinner />
+            正在读取连接状态…
+          </div>
+        ) : !status ? (
+          <div className="integration-placeholder">
+            <p>暂时无法读取连接状态</p>
+            <button className="integration-button" onClick={() => void refresh()}>
+              <RefreshCw size={15} aria-hidden="true" />
+              重新加载
+            </button>
+          </div>
+        ) : (
+          <>
+            {status.connection ? (
+              <dl className="integration-identity">
+                <div>
+                  <dt>连接账号</dt>
+                  <dd>{status.connection.user_name}</dd>
+                </div>
+                <div>
+                  <dt>工作空间</dt>
+                  <dd>
+                    {status.connection.workspace_name}
+                    <span>{status.connection.workspace_slug}</span>
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <div className="integration-intro">
+                <h3>
+                  {status.configured ? '准备好连接你的 Linear' : '连接 Linear，从对话处理待办'}
+                </h3>
+                <p>
+                  {status.configured
+                    ? '已检测到服务端密钥，验证后即可查看账号与工作空间。'
+                    : '先按下方帮助配置个人 API Key，再返回此页验证连接。'}
+                </p>
               </div>
-            </>
-          )}
-          <p className="page-description">
-            查询和更新范围由你的个人 API Key 权限及团队访问范围决定，无需 Linear 管理员权限。
-            连接仅供 Orbit 网页所有者使用，访客和飞书聊天不会继承该账号。
-          </p>
-          <details>
-            <summary>个人 API Key 配置说明</summary>
-            <p>
-              在 Linear 的 Settings → Account → Security &amp; Access 中创建个人 API Key， 选择 Read
-              和 Write 权限及需要访问的团队。若没有创建权限，需工作空间管理员开启成员 API Key 功能。
+            )}
+            {needsAttention && (
+              <p className="integration-warning">密钥已失效。请检查服务端配置后重新验证连接。</p>
+            )}
+            {connected && (
+              <div className="integration-example">
+                <span>试着问一句</span>
+                <p>“分配给我的任务有哪些？”</p>
+                <small>也可以按你的明确指令更新状态、优先级或负责人。</small>
+              </div>
+            )}
+
+            <div className="integration-actions">
+              {connected && (
+                <Link className="integration-button integration-button-primary" to="/chat">
+                  前往对话
+                  <ArrowRight size={16} aria-hidden="true" />
+                </Link>
+              )}
+              {status.configured ? (
+                <button
+                  className={`integration-button ${connected ? '' : 'integration-button-primary'}`}
+                  disabled={busy}
+                  onClick={() => void run('verify')}
+                >
+                  {action === 'verify' ? <Spinner /> : <RefreshCw size={15} aria-hidden="true" />}
+                  {action === 'verify'
+                    ? '正在验证…'
+                    : status.connection
+                      ? '重新验证'
+                      : '验证并连接'}
+                </button>
+              ) : (
+                <button
+                  className="integration-button"
+                  disabled={busy}
+                  onClick={() => void refresh()}
+                >
+                  <RefreshCw size={15} aria-hidden="true" />
+                  重新检测配置
+                </button>
+              )}
+              {status.connection && (
+                <button
+                  className="integration-disconnect"
+                  disabled={busy}
+                  onClick={() => setConfirmDisconnect(true)}
+                >
+                  <Unplug size={15} aria-hidden="true" />
+                  断开连接
+                </button>
+              )}
+            </div>
+            <p className="integration-scope">
+              仅用于你的 Orbit 网页对话，操作范围以 Linear 权限为准。
             </p>
-            <p>
-              在服务端设置 <code>LINEAR_API_KEY</code> 后重启，再点击「验证并连接」。 可选设置{' '}
-              <code>LINEAR_WORKSPACE_SLUG</code> 限定工作空间。 更换密钥后需要重新验证连接。
-            </p>
-          </details>
-        </section>
-      )}
-      <p>
-        <Link to="/chat">返回对话空间</Link>
-      </p>
+          </>
+        )}
+      </section>
+      <ConnectionHelp needsSetup={status?.configured === false} />
+      <DisconnectDialog
+        open={confirmDisconnect}
+        busy={action === 'disconnect'}
+        onClose={() => setConfirmDisconnect(false)}
+        onConfirm={() => void disconnect()}
+      />
     </div>
   );
 }
