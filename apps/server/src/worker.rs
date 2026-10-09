@@ -290,7 +290,11 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
                     &mut tx,
                     job.id,
                     reply_to,
-                    "这次请求暂时无法完成，请稍后重试。管理员可以在 Orbit 控制台查看失败状态。",
+                    match error.code {
+                        "provider_output_limit" => "模型输出达到上限，这次请求未能完成。请缩小问题范围后重试，或联系管理员调整输出预算。",
+                        "provider_content_filtered" => "模型服务过滤了本次输出，请调整问题后重试。",
+                        _ => "这次请求暂时无法完成，请稍后重试。管理员可以在 Orbit 控制台查看失败状态。",
+                    },
                 )
                 .await?;
             }

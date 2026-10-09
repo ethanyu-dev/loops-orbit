@@ -98,6 +98,7 @@ async fn per_request_whitelist_prevents_hidden_execution() {
         model: "fixture".into(),
         tools_enabled: true,
         stream_enabled: false,
+        chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
     })
     .unwrap();
     let host = Fixture {

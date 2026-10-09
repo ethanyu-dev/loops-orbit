@@ -3,6 +3,7 @@ mod conversation_flow;
 mod followups;
 mod linear;
 mod memory;
+mod output_recovery;
 
 use axum::{
     Json, Router,
@@ -133,6 +134,13 @@ impl Harness {
 
                         return Json(json!({"choices":[{"message":{"content":null,"tool_calls":[{"id":"fixture-followup-tool","type":"function","function":{"name":"followup_create","arguments":json!({"topic":"交材料","due_at":(chrono::Utc::now()+chrono::Duration::days(1)).to_rfc3339(),"evidence":text}).to_string()}}]}}]})).into_response();
                     }
+                    // 预算夹具只模拟协议结束原因，不验证真实模型生成质量。
+                    if matches!(text.as_str(), "recover-output-limit" | "always-output-limit" | "filtered-output") {
+                        let reason = if text == "filtered-output" { "content_filter" }
+                            else if text == "recover-output-limit" && body["max_tokens"] == 16384 { "stop" }
+                            else { "length" };
+                        return Json(json!({"choices":[{"finish_reason":reason,"message":{"content":if reason == "stop" {"恢复后的完整答案"} else {"不能写入历史的半截答案"}}}]})).into_response();
+                    }
                     if text == "permanent-failure" {
                         return (StatusCode::BAD_REQUEST, Json(json!({"error":"fixture"}))).into_response();
                     }
@@ -218,6 +226,7 @@ impl Harness {
                 api_key: "fixture-key".into(),
                 tools_enabled: true,
                 stream_enabled: true,
+                chat_output_tokens: agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS,
             },
             feishu: Some(FeishuConfig {
                 api_base: format!("http://127.0.0.1:{port}"),

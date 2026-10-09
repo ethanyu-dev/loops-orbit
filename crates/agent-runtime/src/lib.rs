@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod recovery_tests;
+mod response;
 mod stream;
 mod time;
 pub mod tools;
@@ -14,8 +17,13 @@ const MAX_TOOL_CALLS: usize = 8;
 // 摘要输出独立限长，防止压缩后反而挤占近期对话。
 const MAX_SUMMARY_CHARS: usize = 6000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
-// 日资料需要返回结构化条目及引文，不能与短聊天共用输出预算；推理 token 也会占预算。
-const CHAT_OUTPUT_TOKENS: usize = 2048;
+// 聊天预算为推理和工具参数预留空间；单次恢复最多使用配置值的两倍。
+pub const DEFAULT_CHAT_OUTPUT_TOKENS: usize = 8192;
+// 限制配置范围，避免误填导致无限放大请求成本；恢复上限随之为 32768。
+const MAX_CHAT_OUTPUT_TOKENS: usize = 16384;
+// 后台抽取与短摘要保持独立预算，不随聊天恢复而扩大。
+const AUXILIARY_OUTPUT_TOKENS: usize = 2048;
+// 日资料需要结构化条目及引文，使用独立的较大预算。
 const COMMUNICATION_OUTPUT_TOKENS: usize = 8192;
 // 对话与摘要提示词独立维护，摘要调用不获得工具权限。
 const SUMMARY_PROMPT: &str = include_str!("../prompts/summary.md");
@@ -35,6 +43,8 @@ pub struct ModelConfig {
     pub tools_enabled: bool,
     /// 可关闭流式请求以兼容仅支持完整 JSON 的代理。
     pub stream_enabled: bool,
+    /// 聊天每轮输出预算（256–16384）；长度截断时仅重试当前请求一次。
+    pub chat_output_tokens: usize,
 }
 
 /// 持久化层交给执行器的已完成对话；工具消息由执行器在单次运行内维护。
@@ -73,6 +83,10 @@ pub struct Runtime {
 impl Runtime {
     /// 禁止自动跟随重定向，避免自定义代理将授权头导向其他地址。
     pub fn new(config: ModelConfig) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            (256..=MAX_CHAT_OUTPUT_TOKENS).contains(&config.chat_output_tokens),
+            "AGENT_CHAT_OUTPUT_TOKENS 必须在 256–16384 之间"
+        );
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .read_timeout(Duration::from_secs(30))
@@ -134,12 +148,11 @@ impl Runtime {
                 );
             }
             let answer = self
-                .complete_extra(
+                .complete_chat(
                     &messages,
                     progress,
                     tools_available,
                     session.definitions(host),
-                    CHAT_OUTPUT_TOKENS,
                 )
                 .await?;
             let calls = answer
@@ -177,9 +190,12 @@ impl Runtime {
         let mut body = json!({
             "model": self.config.model,
             "messages": messages,
-            "max_tokens": CHAT_OUTPUT_TOKENS,
+            "max_tokens": AUXILIARY_OUTPUT_TOKENS,
             "stream": stream,
         });
+        if stream {
+            body["stream_options"] = json!({"include_usage": true});
+        }
         if tools {
             body["tools"] = json!([{
                 "type": "function",
@@ -319,7 +335,38 @@ impl Runtime {
         progress: Option<&tokio::sync::watch::Sender<String>>,
         tools: bool,
     ) -> Result<Value, Failure> {
-        self.complete_extra(messages, progress, tools, Vec::new(), CHAT_OUTPUT_TOKENS)
+        self.complete_extra(
+            messages,
+            progress,
+            tools,
+            Vec::new(),
+            AUXILIARY_OUTPUT_TOKENS,
+        )
+        .await
+    }
+
+    /// 只重发长度截断的当前模型请求；已执行的工具结果留在上下文中，不重跑工具循环。
+    async fn complete_chat(
+        &self,
+        messages: &[Value],
+        progress: Option<&tokio::sync::watch::Sender<String>>,
+        tools: bool,
+        extra: Vec<Value>,
+    ) -> Result<Value, Failure> {
+        let budget = self.config.chat_output_tokens;
+        let result = self
+            .complete_extra(messages, progress, tools, extra.clone(), budget)
+            .await;
+        if !matches!(&result, Err(error) if error.code == "provider_output_limit") {
+            return result;
+        }
+        // 丢弃第一份未完成正文及工具参数；它们既不入历史，也不与第二次结果拼接。
+        if let Some(progress) = progress {
+            progress.send_replace(String::new());
+        }
+        tracing::warn!(model = %self.config.model, max_tokens = budget, retry_max_tokens = budget * 2,
+            "模型输出达到上限，仅扩大当前请求预算重试一次");
+        self.complete_extra(messages, progress, tools, extra, budget * 2)
             .await
     }
 
@@ -369,13 +416,24 @@ impl Runtime {
             .is_some_and(|v| v.starts_with("text/event-stream"))
         {
             let mut decoder = stream::Decoder::default();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| failure("provider_read_failed", true))?
-            {
-                decoder.push(&chunk, progress)?;
+            let read_result = async {
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| failure("provider_read_failed", true))?
+                {
+                    decoder.push(&chunk, progress)?;
+                    if decoder.is_done() {
+                        break;
+                    }
+                }
+                Ok::<(), Failure>(())
             }
+            .await;
+            decoder.metadata.log(&self.config.model, max_tokens);
+            // 已明确超限或被过滤时，尾部 usage 的读取失败不能把它改成可重放整个任务的网络错误。
+            decoder.metadata.validate()?;
+            read_result?;
             return decoder.finish();
         }
         let mut bytes = Vec::new();
@@ -391,13 +449,10 @@ impl Runtime {
         }
         let data: Value =
             serde_json::from_slice(&bytes).map_err(|_| failure("provider_invalid_json", false))?;
-        if data
-            .pointer("/choices/0/finish_reason")
-            .and_then(Value::as_str)
-            .is_some_and(|reason| !matches!(reason, "stop" | "tool_calls"))
-        {
-            return Err(failure("provider_incomplete_response", false));
-        }
+        let mut metadata = response::Metadata::default();
+        metadata.observe(&data);
+        metadata.log(&self.config.model, max_tokens);
+        metadata.validate()?;
         data.pointer("/choices/0/message")
             .cloned()
             .ok_or(failure("provider_empty_response", false))
@@ -530,6 +585,7 @@ mod tests {
             api_key: "fixture".into(),
             tools_enabled: true,
             stream_enabled: true,
+            chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
         })
         .unwrap();
         assert_eq!(
@@ -570,6 +626,7 @@ mod tests {
             api_key: "fixture".into(),
             tools_enabled: true,
             stream_enabled: false,
+            chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
         })
         .unwrap();
         assert_eq!(

@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { ArrowDown, Check, Copy } from 'lucide-react';
 import { useMessageScroll } from './useMessageScroll';
 import { Answer } from './Answer';
+import { runError } from './runError';
 import type { Detail, Run } from '../../types';
 import { OrbitMark } from '../../components/OrbitMark';
 import { Spinner } from '../../components/Feedback';
@@ -88,7 +89,7 @@ export function MessageList({
                         )}
                         {run?.status === 'failed' && (
                           <div className="run-error">
-                            这次运行未完成。你可以重新发送消息。
+                            {runError(run.error)}
                             <small>{run?.error}</small>
                           </div>
                         )}

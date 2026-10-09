@@ -29,6 +29,7 @@ fn app() -> Router {
             model: "unused".into(),
             api_key: "unused".into(),
             stream_enabled: false,
+            chat_output_tokens: agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS,
             tools_enabled: false,
         },
         feishu: None,

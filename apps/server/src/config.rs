@@ -124,6 +124,10 @@ impl Config {
                 base_url,
                 model: required("OPENAI_MODEL")?,
                 api_key: required("OPENAI_API_KEY")?,
+                chat_output_tokens: env::var("AGENT_CHAT_OUTPUT_TOKENS")
+                    .unwrap_or_else(|_| agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS.to_string())
+                    .parse()
+                    .context("AGENT_CHAT_OUTPUT_TOKENS 必须是整数")?,
                 stream_enabled: env::var("AGENT_STREAM_ENABLED")
                     .unwrap_or("true".into())
                     .parse()?,
