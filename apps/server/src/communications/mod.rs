@@ -12,6 +12,7 @@ mod oauth;
 pub mod private_subscription;
 pub mod progress;
 mod removal;
+mod retained;
 pub mod routes;
 pub(crate) mod search;
 pub(crate) mod store;

@@ -4,11 +4,16 @@ import { X } from 'lucide-react';
 /** 弹窗捕获打开时的范围，后台轮询不能扩大这次确认的移除对象。 */
 export interface RemovalTarget {
   /** 单个来源或全部订阅的版本约束，原样交给服务端校验。 */
-  selection: { scope: 'all'; revision: string } | { scope: 'one'; id: string; version: number };
+  selection:
+    | { scope: 'all'; revision: string }
+    | { scope: 'one'; id: string; version: number }
+    | { scope: 'retained'; sources: { id: string; version: number }[] };
   /** 打开弹窗时的会话数量。 */
   count: number;
   /** 单项会话名称，全部操作时为空。 */
   label?: string;
+  /** 批量删除时展示确认范围，不随后台轮询变动。 */
+  labels?: string[];
   /** 已移除来源只剩资料清理动作。 */
   deleteOnly?: boolean;
 }
@@ -81,25 +86,40 @@ export function RemoveSubscriptionDialog({
       <p id="remove-subscription-description">
         {target.selection.scope === 'all'
           ? `将移除全部 ${target.count} 个订阅（含已暂停项），不受当前搜索或分页影响。`
-          : `会话：${target.label}`}
+          : target.selection.scope === 'retained'
+            ? `将删除所选 ${target.count} 个会话的保留资料及本地列表记录。`
+            : `会话：${target.label}`}
       </p>
+      {target.labels && (
+        <ul className="subscription-selected-names">
+          {target.labels.map((label, index) => (
+            <li key={index}>{label}</li>
+          ))}
+        </ul>
+      )}
       {!target.deleteOnly && (
         <p>
           停止后续同步、历史导入和相关提醒。飞书账号保持连接，可随时重新订阅。已移除私聊不会被自动加回，未来新发现的私聊仍会自动加入。
         </p>
       )}
-      <label className="subscription-delete-option">
-        <input
-          type="checkbox"
-          checked={deleteDocuments}
-          disabled={busy || target.deleteOnly}
-          onChange={(event) => setDeleteDocuments(event.target.checked)}
-        />
-        <span>
-          <strong>同时删除这些会话的本地资料</strong>
-          <small>原文、图片解读、摘要与检索索引</small>
-        </span>
-      </label>
+      {target.deleteOnly ? (
+        <p>
+          这些会话已经移除订阅。本次删除原文、图片解读、摘要、检索索引及本地列表记录；不会解除自动订阅排除。若要恢复采集，请取消并选择“重新订阅”。
+        </p>
+      ) : (
+        <label className="subscription-delete-option">
+          <input
+            type="checkbox"
+            checked={deleteDocuments}
+            disabled={busy || target.deleteOnly}
+            onChange={(event) => setDeleteDocuments(event.target.checked)}
+          />
+          <span>
+            <strong>同时删除这些会话的本地资料</strong>
+            <small>原文、图片解读、摘要与检索索引</small>
+          </span>
+        </label>
+      )}
       <p className={deleteDocuments ? 'subscription-delete-warning' : 'subscription-keep-note'}>
         {deleteDocuments
           ? '删除后无法撤销，飞书中的原始消息不受影响。'

@@ -4,6 +4,7 @@ mod library_tests;
 mod private_subscription_tests;
 mod progress_tests;
 mod removal_tests;
+mod retained_tests;
 mod subscription_tests;
 mod tool_tests;
 use super::*;

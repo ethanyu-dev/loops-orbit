@@ -96,7 +96,7 @@ async fn apply(state: &AppState, candidate: &Candidate, data: &Value) -> ApiResu
             .chars()
             .take(120)
             .collect::<String>();
-        // 已暂停、已保留资料的来源均不更新；被删除的私聊靠排除记录阻止重新添加。
+        // 排除记录表达明确退出；无排除的历史来源可恢复，已订阅（含暂停）的来源保持不变。
         sqlx::query(include_str!("../sql/communication_private_subscribe.sql"))
             .bind(Uuid::new_v4())
             .bind(&candidate.owner)

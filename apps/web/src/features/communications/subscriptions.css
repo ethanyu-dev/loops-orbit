@@ -144,6 +144,39 @@
   padding: 10px 0;
   font-size: 13px;
 }
+.subscription-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.subscription-name-cell input {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--text);
+}
+.subscription-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 12px;
+  font-size: 12px;
+}
+.subscription-batch-actions button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+.subscription-selected-names {
+  max-height: 160px;
+  overflow: auto;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
 .subscription-name svg {
   flex-shrink: 0;
   color: var(--muted);
@@ -366,8 +399,10 @@
     gap: 0 10px;
     padding-block: 8px;
   }
-  .subscription-name {
+  .subscription-name-cell {
     grid-column: 1;
+  }
+  .subscription-name {
     padding: 4px 0;
   }
   .subscription-actions {
