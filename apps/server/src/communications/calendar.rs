@@ -56,6 +56,8 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
             },
             summary_hash: None,
             summary_error: None,
+            summary_status: "pending".into(),
+            summary_attempts: 0,
         };
         let mut messages: Vec<_> = messages.into_values().collect();
         messages
@@ -98,7 +100,7 @@ pub(super) async fn migrate(state: &AppState) -> ApiResult<()> {
         .execute(&mut *tx)
         .await?;
     for doc in &current {
-        sqlx::query("INSERT INTO communication_documents(id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(doc.id).bind(doc.source_id).bind(&doc.day).bind(&doc.raw_hash).bind(doc.version).bind(&doc.summary_hash).bind(&doc.summary_error).bind(doc.extraction_version).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO communication_documents(id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version,summary_status,summary_attempts) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)").bind(doc.id).bind(doc.source_id).bind(&doc.day).bind(&doc.raw_hash).bind(doc.version).bind(&doc.summary_hash).bind(&doc.summary_error).bind(doc.extraction_version).bind(&doc.summary_status).bind(doc.summary_attempts).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE communication_sources SET day_timezone='Asia/Shanghai',version=version+1 WHERE id=$1").bind(source.id).execute(&mut *tx).await?;
     tx.commit().await?;

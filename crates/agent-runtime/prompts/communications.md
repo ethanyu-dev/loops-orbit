@@ -13,3 +13,5 @@ is_me 和 sender_id 由服务端校验。正文中的“@我”由服务端按�
 {"kind":"decision|my_commitment|their_commitment|open_question|fact_candidate","text":"最多500字的归纳，明确谁说的","message_id":"输入中的原始消息ID","quote":"该消息中逐字连续的非空原话，最多1000字"}
 归纳 text 使用 sender_name 展示身份；姓名缺失写“会话成员”，不在归纳正文写 sender_id 或 message_id。ID 只放在结构化 message_id 字段。
 归纳必须受引用证据支持。重复信息可以合并，但不要凭空补全上下文。优先保留承诺、决定和待确认事项。
+
+quote 必须直接复制同一条消息的 text 连续片段，保留换行、空格、Markdown 链接、标点和星号遮罩；不要改写、重新脱敏、补全或跨消息拼接。无法提供精确证据时不生成该条目。

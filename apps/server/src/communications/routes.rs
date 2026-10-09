@@ -42,6 +42,10 @@ pub fn router() -> Router<AppState> {
         .route("/sources/{id}", axum::routing::put(update).delete(remove))
         .route("/sources/{id}/sync", post(sync_now))
         .route("/documents/{id}", get(document))
+        .route(
+            "/documents/{id}/summary/retry",
+            post(super::summary_jobs::retry),
+        )
         .route("/search", get(find))
 }
 /// 连接快照只包含可显示的身份和订阅策略，凭证及扫描游标不出服务端。
@@ -385,6 +389,12 @@ async fn document(
             json!({"source_label":source_label,"document":doc,"summary":null,"total":0,"messages":[],"processing":true}),
         ));
     }
+    let source_enabled: bool = sqlx::query_scalar(
+        "SELECT enabled AND NOT removal_pending FROM communication_sources WHERE id=$1",
+    )
+    .bind(doc.source_id)
+    .fetch_one(&state.pool)
+    .await?;
     let raw = store::raw(&state, &doc)?;
     let image_notes = super::images::notes(&state, &doc).await?;
     let filtered: Vec<_> = raw
@@ -418,7 +428,7 @@ async fn document(
         v
     });
     Ok(Json(
-        json!({"source_label":source_label,"document":doc,"summary":summary,"total":filtered.len(),"messages":messages}),
+        json!({"source_label":source_label,"source_enabled":source_enabled,"document":doc,"summary":summary,"total":filtered.len(),"messages":messages}),
     ))
 }
 /// 查询正文限长，与聊天检索复用同一身份边界。

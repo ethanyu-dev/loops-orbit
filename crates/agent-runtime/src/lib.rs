@@ -270,10 +270,22 @@ impl Runtime {
 
     /// 沟通整理不提供工具；服务端另外验证发送者和逐字证据。
     pub async fn summarize_communications(&self, input: &Value) -> Result<Value, Failure> {
-        let messages = vec![
-            json!({"role":"system","content":include_str!("../prompts/communications.md")}),
-            json!({"role":"user","content":input.to_string()}),
-        ];
+        self.communication_summary(input, false).await
+    }
+
+    /// 只纠正服务端明确拒绝的候选；返回内容仍须逐条通过服务端校验。
+    pub async fn repair_communication_summary(&self, input: &Value) -> Result<Value, Failure> {
+        self.communication_summary(input, true).await
+    }
+
+    /// 整理和纠错共享输出预算及无工具边界，提示词独立于运行逻辑保存。
+    async fn communication_summary(&self, input: &Value, repair: bool) -> Result<Value, Failure> {
+        let mut messages =
+            vec![json!({"role":"system","content":include_str!("../prompts/communications.md")})];
+        if repair {
+            messages.push(json!({"role":"system","content":include_str!("../prompts/communication_repair.md")}));
+        }
+        messages.push(json!({"role":"user","content":input.to_string()}));
         let answer = self
             .complete_extra(
                 &messages,

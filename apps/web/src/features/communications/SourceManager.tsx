@@ -439,6 +439,7 @@ export function SourceManager({
                       <span>待整理 {stats.summarizing} 天</span>
                       <span>统计更新中 {stats.checking} 天</span>
                       <span>索引处理中 {stats.indexing} 天</span>
+                      <span>部分完成 {stats.partial ?? 0} 天</span>
                       <span>整理失败 {stats.errors} 天</span>
                       <span>
                         图片解读 {stats.images_ready}/{stats.images}

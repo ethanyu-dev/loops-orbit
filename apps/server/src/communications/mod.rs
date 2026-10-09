@@ -19,6 +19,7 @@ pub(crate) mod search;
 pub(crate) mod store;
 pub mod subscription;
 pub(crate) mod summary;
+pub mod summary_jobs;
 pub mod sync;
 pub(crate) mod tools;
 /// 与聊天共用的身份隔离检索入口。
@@ -121,9 +122,12 @@ pub struct Document {
     pub summary_hash: Option<String>,
     /// 摘要失败分类。
     pub summary_error: Option<String>,
+    /// 排队、运行、等待重试、完整成功、部分成功或停止重试。
+    pub summary_status: String,
+    /// 当前文档版本已领取的执行次数，用于有界重试和在途写回围栏。
+    pub summary_attempts: i32,
 }
-pub(super) const DOCUMENT_COLUMNS: &str =
-    "id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version";
+pub(super) const DOCUMENT_COLUMNS: &str = "id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version,summary_status,summary_attempts";
 
 /// 提醒引用的是用户确认的摘要条目，不把整段外部对话当作用户指令。
 #[derive(Clone, Serialize, Deserialize)]

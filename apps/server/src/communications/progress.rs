@@ -25,6 +25,7 @@ pub(super) async fn read(state: &AppState) -> ApiResult<Vec<Value>> {
         "SELECT jsonb_build_object('source_id',d.source_id,'total',count(*),
         'checking',count(*) FILTER(WHERE p.document_id IS NULL),
         'ready',count(*) FILTER(WHERE p.status='ready'),
+        'partial',count(*) FILTER(WHERE p.status='partial'),
         'summarizing',count(*) FILTER(WHERE p.status='summarizing'),
         'indexing',count(*) FILTER(WHERE p.status='indexing'),
         'errors',count(*) FILTER(WHERE p.status='errors'),
@@ -92,7 +93,9 @@ async fn inspect(state: &AppState, doc: &Document) -> ApiResult<(&'static str, i
     let notes = images::notes(state, doc).await?;
     let ready = notes.iter().filter(|n| n.description.is_some()).count() as i64;
     let failed = notes.iter().filter(|n| n.error.is_some()).count() as i64;
-    let status = if doc.summary_error.is_some() {
+    let status = if doc.summary_status == "partial" && store::summary(state, doc).is_ok() {
+        "partial"
+    } else if doc.summary_error.is_some() {
         "errors"
     } else if let Ok(summary) = store::summary(state, doc) {
         let entry = search::summary_entry(doc, &summary);
