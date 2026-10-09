@@ -196,21 +196,16 @@ async fn personal_key_connection_and_disconnect() {
     let (h, _, server) = setup().await;
     let cookie = h.login().await;
     connect(&h, &cookie).await;
-    let row: (
-        Option<Vec<u8>>,
-        Option<chrono::DateTime<chrono::Utc>>,
-        String,
-        Vec<String>,
-    ) = sqlx::query_as(
-        "SELECT credentials,expires_at,key_fingerprint,scopes FROM linear_connections",
+    let row: (bool, bool, String, bool) = sqlx::query_as(
+        "SELECT credentials IS NULL,expires_at IS NULL,key_fingerprint,cardinality(scopes)=0 FROM linear_connections",
     )
     .fetch_one(&h.state.pool)
     .await
     .unwrap();
-    assert!(row.0.is_none());
-    assert!(row.1.is_none());
+    assert!(row.0);
+    assert!(row.1);
     assert_eq!(row.2, auth::hash("fixture-linear-key"));
-    assert!(row.3.is_empty());
+    assert!(row.3);
     let (_, _, removed) = h
         .request("DELETE", "/api/linear/connection", Some(&cookie), json!({}))
         .await;
