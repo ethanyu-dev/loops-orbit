@@ -47,7 +47,8 @@ pub async fn run(state: AppState, stop: watch::Receiver<bool>) {
         work_loop(&state, stop.clone(), 4),
         work_loop(&state, stop.clone(), 5),
         work_loop(&state, stop.clone(), 6),
-        work_loop(&state, stop, 7)
+        work_loop(&state, stop.clone(), 7),
+        work_loop(&state, stop, 8)
     );
 }
 /// 每条循环只执行一种工作；故障统一退避，避免上游中断时快速重试。
@@ -69,14 +70,15 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
                         .map(|_| false),
                     5 => super::images::step(state).await.map(|_| false),
                     6 => super::progress::step(state).await.map(|_| false),
-                    _ => super::private_subscription::step(state)
+                    7 => super::private_subscription::step(state)
                         .await
                         .map(|_| false),
+                    _ => super::removal_jobs::step(state).await,
                 }
             };
             let result = tokio::select! { result=work=>result, _=stop.changed()=>return };
             match result {
-                Ok(true) if kind == 0 => delay = ACTIVE_SYNC_DELAY_MS,
+                Ok(true) if kind == 0 || kind == 8 => delay = ACTIVE_SYNC_DELAY_MS,
                 Err(error) => {
                     tracing::warn!(code = error.1, kind, "沟通后台任务暂时失败");
                     delay = 60000;

@@ -9,7 +9,7 @@ export type RetainedSelection = Pick<Source, 'id' | 'version' | 'label'>;
 /** 全选明确针对当前搜索结果，分页不参与范围计算。 */
 export function selectRetained(sources: Source[]): RetainedSelection[] {
   return sources
-    .filter((source) => source.subscribed === false)
+    .filter((source) => source.subscribed === false && !source.removal_pending)
     .slice(0, MAX_RETAINED_SELECTION)
     .map(({ id, version, label }) => ({ id, version, label }));
 }
@@ -19,7 +19,12 @@ export function toggleRetained(selected: RetainedSelection[], source: Source) {
   if (selected.some((item) => item.id === source.id)) {
     return selected.filter((item) => item.id !== source.id);
   }
-  if (source.subscribed !== false || selected.length >= MAX_RETAINED_SELECTION) return selected;
+  if (
+    source.subscribed !== false ||
+    source.removal_pending ||
+    selected.length >= MAX_RETAINED_SELECTION
+  )
+    return selected;
   return [...selected, ...selectRetained([source])];
 }
 

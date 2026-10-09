@@ -11,4 +11,5 @@ ON CONFLICT(owner, chat_id) DO UPDATE SET
     window_start = CASE WHEN communication_sources.subscribed THEN communication_sources.window_start ELSE NULL END,
     window_end = CASE WHEN communication_sources.subscribed THEN communication_sources.window_end ELSE NULL END,
     next_sync = now()
+WHERE NOT communication_sources.removal_pending
 RETURNING id

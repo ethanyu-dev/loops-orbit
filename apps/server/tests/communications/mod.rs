@@ -3,6 +3,7 @@ mod extraction_tests;
 mod library_tests;
 mod private_subscription_tests;
 mod progress_tests;
+mod removal_job_tests;
 mod removal_tests;
 mod retained_tests;
 mod subscription_tests;
@@ -817,4 +818,22 @@ async fn cards_are_extracted_and_old_scope_is_reprocessed() {
     worker.await.unwrap();
     server.abort();
     h.close().await;
+}
+
+/// 显式推进持久化删除队列；不等待生产调度间隔，结果仍由真实状态接口读取。
+async fn finish_removal(h: &Harness, cookie: &str) -> Value {
+    for _ in 0..1010 {
+        if !communications::removal_jobs::step(&h.state).await.unwrap() {
+            let (_, _, status) = h
+                .request(
+                    "GET",
+                    "/api/communications/status",
+                    Some(cookie),
+                    Value::Null,
+                )
+                .await;
+            return status["removals"][0].clone();
+        }
+    }
+    panic!("测试删除队列没有收敛");
 }

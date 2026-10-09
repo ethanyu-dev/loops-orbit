@@ -171,9 +171,11 @@ async fn removal_reports_partial_deletion_and_can_retry() {
             json!({"selection":all_selection(&h,&cookie).await,"delete_documents":true}),
         )
         .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["removed"], 1);
-    assert_eq!(result["failed_ids"], json!([broken]));
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let job = result["job_id"].as_str().unwrap().to_owned();
+    let progress = finish_removal(&h, &cookie).await;
+    assert_eq!(progress["complete"], 1);
+    assert_eq!(progress["failed"], 1);
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM communication_documents WHERE source_id=$1"
@@ -201,7 +203,7 @@ async fn removal_reports_partial_deletion_and_can_retry() {
             .fetch_one(&h.state.pool)
             .await
             .unwrap();
-    assert!(subscribed && !enabled);
+    assert!(!subscribed && !enabled);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_connections")
             .fetch_one(&h.state.pool)
@@ -210,16 +212,20 @@ async fn removal_reports_partial_deletion_and_can_retry() {
         1
     );
     std::fs::remove_file(directory).unwrap();
-    let (_, _, result) = h
-        .request(
+    assert_eq!(
+        h.request(
             "POST",
-            "/api/communications/sources/remove",
+            &format!("/api/communications/removals/{job}/retry"),
             Some(&cookie),
-            json!({"selection":all_selection(&h,&cookie).await,"delete_documents":true}),
+            Value::Null
         )
-        .await;
-    assert_eq!(result["removed"], 1);
-    assert_eq!(result["failed_ids"], json!([]));
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let progress = finish_removal(&h, &cookie).await;
+    assert_eq!(progress["complete"], 2);
+    assert_eq!(progress["failed"], 0);
     server.abort();
     h.close().await;
 }

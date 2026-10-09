@@ -20,6 +20,10 @@ test('全选只包含历史来源且有数量上限', () => {
   const active = { id: 'active', version: 1, label: '已订阅', subscribed: true };
   assert.deepEqual(selectRetained([active]), []);
   assert.deepEqual(toggleRetained([], active), []);
+  // 后台删除已经受理的来源不能再被全选或单独勾选。
+  const pending = { ...rows[0], removal_pending: true };
+  assert.deepEqual(selectRetained([pending]), []);
+  assert.deepEqual(toggleRetained([], pending), []);
   const selected = selectRetained(rows);
   assert.equal(toggleRetained(selected, rows[1001]).length, 1000);
   assert.deepEqual(retainedVersions(selectRetained(rows.filter((row) => row.id === '42'))), [{ id: '42', version: 1 }]);

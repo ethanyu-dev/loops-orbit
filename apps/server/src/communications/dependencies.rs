@@ -61,19 +61,32 @@ pub(crate) async fn cancel(
     document: Option<Uuid>,
     source: Option<Uuid>,
 ) -> ApiResult<()> {
+    cancel_scope(state, document, source.map(|id| vec![id.to_string()])).await
+}
+/// 整批来源只锁定会话并扫描依赖一次，避免会话数量乘上数据库往返次数。
+pub(crate) async fn cancel_sources(state: &AppState, sources: &[Uuid]) -> ApiResult<()> {
+    cancel_scope(
+        state,
+        None,
+        Some(sources.iter().map(Uuid::to_string).collect()),
+    )
+    .await
+}
+/// 单文档、单来源和批量来源共用同一取消边界。
+async fn cancel_scope(
+    state: &AppState,
+    document: Option<Uuid>,
+    sources: Option<Vec<String>>,
+) -> ApiResult<()> {
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT id FROM conversations WHERE owner='admin' OR owner IN(SELECT 'feishu:'||open_id FROM communication_connections) ORDER BY id FOR UPDATE").execute(&mut *tx).await?;
-    let ids:Vec<Uuid>=sqlx::query_scalar("UPDATE followups SET status='cancelled',version=version+1,lease_token=NULL,error='communication_source_changed',updated_at=now() WHERE memory_versions ? '_communication' AND ($1::text IS NULL OR memory_versions->'_communication'->>'document_id'=$1) AND ($2::text IS NULL OR memory_versions->'_communication'->>'source_id'=$2) AND status IN('scheduled','checking','queued') RETURNING id")
-        .bind(document.map(|id|id.to_string())).bind(source.map(|id|id.to_string())).fetch_all(&mut *tx).await?;
-    for id in ids {
-        sqlx::query(include_str!("../sql/followup_cancel_outbox.sql"))
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-    }
+    let ids:Vec<Uuid>=sqlx::query_scalar("UPDATE followups SET status='cancelled',version=version+1,lease_token=NULL,error='communication_source_changed',updated_at=now() WHERE memory_versions ? '_communication' AND ($1::text IS NULL OR memory_versions->'_communication'->>'document_id'=$1) AND ($2::text[] IS NULL OR memory_versions->'_communication'->>'source_id'=ANY($2)) AND status IN('scheduled','checking','queued') RETURNING id")
+        .bind(document.map(|id|id.to_string())).bind(&sources).fetch_all(&mut *tx).await?;
+    sqlx::query("UPDATE outbox SET status='cancelled',lease_until=NULL WHERE followup_id=ANY($1) AND status IN('queued','running')")
+        .bind(&ids).execute(&mut *tx).await?;
     // 历史提醒可保留用户确认过的事项，但失效资料的原话不继续滞留在内部依赖字段。
-    sqlx::query("UPDATE followups SET memory_versions=jsonb_set(memory_versions,'{_communication,evidence}','null'::jsonb) WHERE memory_versions ? '_communication' AND ($1::text IS NULL OR memory_versions->'_communication'->>'document_id'=$1) AND ($2::text IS NULL OR memory_versions->'_communication'->>'source_id'=$2)")
-        .bind(document.map(|id|id.to_string())).bind(source.map(|id|id.to_string())).execute(&mut *tx).await?;
+    sqlx::query("UPDATE followups SET memory_versions=jsonb_set(memory_versions,'{_communication,evidence}','null'::jsonb) WHERE memory_versions ? '_communication' AND ($1::text IS NULL OR memory_versions->'_communication'->>'document_id'=$1) AND ($2::text[] IS NULL OR memory_versions->'_communication'->>'source_id'=ANY($2))")
+        .bind(document.map(|id|id.to_string())).bind(&sources).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
 }

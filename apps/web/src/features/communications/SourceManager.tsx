@@ -13,6 +13,7 @@ import { api, errorText } from '../../api';
 import { SourcePicker } from './SourcePicker';
 import { RemoveSubscriptionDialog, type RemovalTarget } from './RemoveSubscriptionDialog';
 import { RestoreSubscriptionsDialog } from './RestoreSubscriptionsDialog';
+import { RemovalProgress } from './RemovalProgress';
 import {
   MAX_RETAINED_SELECTION,
   retainedVersions,
@@ -28,6 +29,7 @@ const SOURCE_PAGE_SIZE = 25;
 
 /** 订阅概况保持单行，失败原因和派生进度在展开区查看。 */
 function status(source: Source) {
+  if (source.removal_pending) return '待清理';
   if (source.subscribed === false) return '已移除';
   if (!source.enabled) return '已暂停';
   if (source.error) return '同步失败';
@@ -120,25 +122,29 @@ export function SourceManager({
     setError('');
     setNotice('');
     try {
-      const result = await api<{ removed: number; failed_ids: string[] }>(
-        '/communications/sources/remove',
-        {
-          method: 'POST',
-          body: JSON.stringify({ selection: target.selection, delete_documents: deleteDocuments }),
-        },
-      );
+      const result = await api<{
+        removed: number;
+        failed_ids: string[];
+        job_id?: string;
+        queued?: number;
+      }>('/communications/sources/remove', {
+        method: 'POST',
+        body: JSON.stringify({ selection: target.selection, delete_documents: deleteDocuments }),
+      });
       setNotice(
-        result.failed_ids.length
-          ? `已处理 ${result.removed} 个会话；${result.failed_ids.length} 个资料清理失败，已停止同步，请在列表中重试。`
-          : deleteDocuments
-            ? `已处理 ${result.removed} 个会话并删除本地资料。`
-            : `已移除 ${result.removed} 个订阅，资料已保留。`,
+        result.job_id
+          ? `已提交 ${result.queued} 个会话的后台删除任务，可关闭页面。实际完成情况请查看下方进度。`
+          : result.failed_ids.length
+            ? `已处理 ${result.removed} 个会话；${result.failed_ids.length} 个资料清理失败，已停止同步，请在列表中重试。`
+            : deleteDocuments
+              ? `已处理 ${result.removed} 个会话并删除本地资料。`
+              : `已移除 ${result.removed} 个订阅，资料已保留。`,
       );
       setTarget(null);
       setSelected([]);
       await reload();
     } catch (error) {
-      setError(`${errorText(error)} 请关闭弹窗，核对最新列表后重试。`);
+      setError(`${errorText(error)} 超时不代表未执行，请关闭弹窗，先核对后台任务进度和最新列表。`);
       setSelected([]);
       await reload();
     } finally {
@@ -276,6 +282,9 @@ export function SourceManager({
           {notice}
         </p>
       )}
+      {!!data.removals?.length && (
+        <RemovalProgress jobs={data.removals} reload={reload} report={report} />
+      )}
       {archived && (
         <>
           <p className="subscription-archive-note">
@@ -287,9 +296,9 @@ export function SourceManager({
               disabled={busy || !filtered.length}
               onClick={() => setSelected(selectRetained(filtered))}
             >
-              {filtered.length > MAX_RETAINED_SELECTION
+              {filtered.filter((source) => !source.removal_pending).length > MAX_RETAINED_SELECTION
                 ? `选择前 ${MAX_RETAINED_SELECTION} 个搜索结果`
-                : `全选搜索结果（${filtered.length}）`}
+                : `全选可操作结果（${filtered.filter((source) => !source.removal_pending).length}）`}
             </button>
             <button disabled={busy || !selected.length} onClick={() => setSelected([])}>
               清空选择
@@ -345,6 +354,7 @@ export function SourceManager({
                       checked={selected.some((item) => item.id === source.id)}
                       disabled={
                         busy ||
+                        source.removal_pending ||
                         (selected.length >= MAX_RETAINED_SELECTION &&
                           !selected.some((item) => item.id === source.id))
                       }
@@ -375,7 +385,7 @@ export function SourceManager({
                   {source.subscribed === false ? (
                     <button
                       className="subscription-restore"
-                      disabled={busy}
+                      disabled={busy || source.removal_pending}
                       onClick={() => void change(source, 'restore')}
                     >
                       重新订阅
@@ -406,7 +416,7 @@ export function SourceManager({
                     className="icon-button"
                     title={source.subscribed === false ? '删除保留资料' : '移除订阅'}
                     aria-label={`${source.subscribed === false ? '删除保留资料' : '移除订阅'}：${source.label}`}
-                    disabled={busy}
+                    disabled={busy || source.removal_pending}
                     onClick={() => confirmOne(source)}
                   >
                     <Trash2 size={15} />

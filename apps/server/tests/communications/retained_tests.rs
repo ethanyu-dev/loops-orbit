@@ -145,9 +145,11 @@ async fn retained_delete_reports_partial_failure_and_keeps_exclusions() {
         3
     );
     let (status, _, result) = h.request("POST", "/api/communications/sources/remove", Some(&cookie), json!({"selection":{"scope":"retained","sources":[{"id":good,"version":2},{"id":broken,"version":2}]},"delete_documents":true})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["removed"], 1);
-    assert_eq!(result["failed_ids"], json!([broken]));
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let job = result["job_id"].as_str().unwrap().to_owned();
+    let progress = finish_removal(&h, &cookie).await;
+    assert_eq!(progress["complete"], 1);
+    assert_eq!(progress["failed"], 1);
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM communication_documents WHERE source_id=$1"
@@ -174,10 +176,20 @@ async fn retained_delete_reports_partial_failure_and_keeps_exclusions() {
         3
     );
     std::fs::remove_file(&directory).unwrap();
-    let (status, _, result) = h.request("POST", "/api/communications/sources/remove", Some(&cookie), json!({"selection":{"scope":"retained","sources":[{"id":broken,"version":3}]},"delete_documents":true})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["removed"], 1);
-    assert_eq!(result["failed_ids"], json!([]));
+    assert_eq!(
+        h.request(
+            "POST",
+            &format!("/api/communications/removals/{job}/retry"),
+            Some(&cookie),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let progress = finish_removal(&h, &cookie).await;
+    assert_eq!(progress["complete"], 2);
+    assert_eq!(progress["failed"], 0);
     server.abort();
     h.close().await;
 }

@@ -39,7 +39,7 @@ pub(super) async fn selected(
         ));
     }
     let ids = expected.keys().copied().collect::<Vec<_>>();
-    let current: Vec<SubscriptionVersion> = sqlx::query_as("SELECT id,version FROM communication_sources WHERE owner='admin' AND NOT subscribed AND id=ANY($1) ORDER BY id FOR UPDATE")
+    let current: Vec<SubscriptionVersion> = sqlx::query_as("SELECT id,version FROM communication_sources WHERE owner='admin' AND NOT subscribed AND NOT removal_pending AND id=ANY($1) ORDER BY id FOR UPDATE")
         .bind(&ids).fetch_all(&mut **tx).await?;
     if current.len() != count
         || current

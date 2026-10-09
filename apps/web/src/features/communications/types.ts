@@ -8,6 +8,8 @@ export interface Source {
   label: string;
   /** 移除订阅后可继续保留日文件；旧快照缺失时按已订阅处理。 */
   subscribed?: boolean;
+  /** 已受理删除任务，完成或重试前不能重新订阅。 */
+  removal_pending?: boolean;
   /** 同时控制采集与检索。 */
   enabled: boolean;
   /** 防止旧页面覆盖新状态。 */
@@ -94,6 +96,8 @@ export interface Detail {
 }
 /** 只包含可显示状态，任何令牌均不返回前端。 */
 export interface Snapshot {
+  /** 服务端持久化的删除进度，页面刷新后仍可查看和重试。 */
+  removals?: { id: string; total: number; pending: number; complete: number; failed: number }[];
   /** 全部订阅的版本摘要，用于绑定批量移除弹窗的范围。 */
   subscription_revision?: string;
   /** 服务端是否启用采集。 */

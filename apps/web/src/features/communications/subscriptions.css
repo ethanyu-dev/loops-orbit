@@ -250,6 +250,12 @@
   background: var(--panel);
   border-radius: 7px;
 }
+.subscription-removal-jobs button {
+  margin-left: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
 .subscription-empty {
   text-align: center;
   color: var(--muted);

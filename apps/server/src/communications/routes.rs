@@ -38,6 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/sources", post(add))
         .route("/sources/remove", post(super::removal::remove))
         .route("/sources/restore", post(super::retained::restore))
+        .route("/removals/{id}/retry", post(super::removal_jobs::retry))
         .route("/sources/{id}", axum::routing::put(update).delete(remove))
         .route("/sources/{id}/sync", post(sync_now))
         .route("/documents/{id}", get(document))
@@ -81,6 +82,7 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     .await?;
     let jobs: Vec<super::subscription::HistoryJob> = sqlx::query_as("SELECT id,version,source_id,start_at,end_at,snapshot_end,page_token,status,error FROM communication_history_jobs ORDER BY created_at DESC LIMIT 100").fetch_all(&state.pool).await?;
     let progress = super::progress::read(&state).await?;
+    let removals = super::removal_jobs::progress(&state).await?;
     // 版本摘要必须来自同一份展示快照，避免计数和确认范围跨请求漂移。
     let mut subscriptions = sources
         .iter()
@@ -93,7 +95,7 @@ async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<J
     subscriptions.sort_by_key(|source| source.id);
     let subscription_revision = super::removal::revision(&subscriptions);
     Ok(Json(
-        json!({"subscription_revision":subscription_revision,"history_jobs":jobs,"progress":progress,"enabled":state.config.communications.is_some(),"connection":connection,"sources":sources,"documents":documents}),
+        json!({"subscription_revision":subscription_revision,"history_jobs":jobs,"progress":progress,"removals":removals,"enabled":state.config.communications.is_some(),"connection":connection,"sources":sources,"documents":documents}),
     ))
 }
 /// 浏览器按页加载候选，读取列表不会创建订阅。
@@ -196,8 +198,12 @@ async fn add(
         .bind(&input.chat_id)
         .bind(input.label.trim())
         .bind(start)
-        .fetch_one(&state.pool)
-        .await?;
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(ApiError(
+            StatusCode::CONFLICT,
+            "communication_source_changed",
+        ))?;
     sqlx::query("UPDATE communication_sources SET chat_mode=$2 WHERE id=$1")
         .bind(id)
         .bind(mode)
@@ -274,17 +280,19 @@ async fn forget(state: &AppState, id: Uuid) -> ApiResult<()> {
 
 /// 调用方已经停止采集并使依赖失效，文件清理失败时保留来源以供重试。
 pub(super) async fn erase_files(state: &AppState, id: Uuid) -> ApiResult<()> {
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM communication_documents WHERE source_id=$1")
-            .bind(id)
-            .fetch_all(&state.pool)
-            .await?;
-    for doc in ids {
-        search::remove_vector(state, doc).await?;
+    // 按来源一次清除向量，避免每份日文件重复检测表和发起删除请求。
+    let vectors: bool = sqlx::query_scalar("SELECT to_regclass('memory_vectors') IS NOT NULL")
+        .fetch_one(&state.pool)
+        .await?;
+    if vectors {
+        sqlx::query("DELETE FROM memory_vectors WHERE owner='communications:admin' AND id IN(SELECT id FROM communication_documents WHERE source_id=$1)")
+            .bind(id).execute(&state.pool).await?;
     }
     let directory = store::directory(state, id)?;
-    if directory.exists() {
-        std::fs::remove_dir_all(directory).map_err(unavailable)?;
+    match tokio::fs::remove_dir_all(directory).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(unavailable(error)),
     }
     sqlx::query("DELETE FROM communication_sources WHERE id=$1")
         .bind(id)
@@ -306,6 +314,18 @@ async fn remove(
     sqlx::query("SELECT owner FROM communication_connections WHERE owner='admin' FOR UPDATE")
         .execute(&mut *tx)
         .await?;
+    let pending: bool = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT removal_pending FROM communication_sources WHERE id=$1),false)",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if pending {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "communication_source_changed",
+        ));
+    }
     sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=$1 ON CONFLICT DO NOTHING").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
     forget(&state, id).await?;

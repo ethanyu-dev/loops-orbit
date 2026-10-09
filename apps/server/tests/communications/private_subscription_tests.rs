@@ -111,8 +111,9 @@ async fn private_discovery_respects_scope_and_manual_controls() {
         )
         .await
         .0,
-        StatusCode::OK
+        StatusCode::ACCEPTED
     );
+    finish_removal(&h, &cookie).await;
     for _ in 0..3 {
         due_private(&h).await;
         communications::private_subscription::step(&h.state)
