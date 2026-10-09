@@ -15,6 +15,7 @@ const ERRORS: Record<string, string> = {
   communication_source_changed: '资料已被更新、暂停或遗忘，请重新打开后确认。',
   invalid_history_range: '请选择有效日期范围，单次最多一年，开始日期不能晚于今天。',
   invalid_communication_source: '请选择有效的飞书会话和显示名称。',
+  invalid_communication_selection: '请选择 1 至 1,000 个不同的历史会话。',
   communication_unavailable: '沟通资料暂时不可用，请检查同步状态或稍后重试。',
   communication_provider_rejected: '飞书拒绝了请求，请检查用户授权及应用消息读取权限。',
   communication_oauth_invalid: '授权回调已失效，请从此浏览器重新发起连接。',

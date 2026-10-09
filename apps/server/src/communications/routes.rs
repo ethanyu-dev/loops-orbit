@@ -37,6 +37,7 @@ pub fn router() -> Router<AppState> {
         .route("/chats/activity", post(super::extraction::activity))
         .route("/sources", post(add))
         .route("/sources/remove", post(super::removal::remove))
+        .route("/sources/restore", post(super::retained::restore))
         .route("/sources/{id}", axum::routing::put(update).delete(remove))
         .route("/sources/{id}/sync", post(sync_now))
         .route("/documents/{id}", get(document))

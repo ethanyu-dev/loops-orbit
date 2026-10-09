@@ -10,18 +10,13 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// 弹窗预览绑定全部订阅的身份及版本，阻止确认期间新增的订阅被悄悄移除。
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SubscriptionVersion {
     /// 来源主键。
     pub id: Uuid,
     /// 用户看到的启停或重新订阅版本。
     pub version: i64,
-}
-
-/// 统一读取订阅快照；调用方写入时还需持有沟通锁。
-pub(super) async fn snapshot(state: &AppState) -> ApiResult<Vec<SubscriptionVersion>> {
-    Ok(sqlx::query_as("SELECT id,version FROM communication_sources WHERE owner='admin' AND subscribed ORDER BY id")
-        .fetch_all(&state.pool).await?)
 }
 
 /// 固定长度 UUID 和版本编码使摘要无歧义，返回值不承载任何访问权限。
@@ -42,6 +37,8 @@ enum Selection {
     All { revision: String },
     /// 移除或删除一项来源。
     One { id: Uuid, version: i64 },
+    /// 仅清理勾选的历史来源，包含跨页选择但不包含后来新增的来源。
+    Retained { sources: Vec<SubscriptionVersion> },
 }
 
 /// 删除必须明确勾选；省略选项时只移除订阅并保留资料。
@@ -73,9 +70,15 @@ pub(super) async fn remove(
     identity.require_admin()?;
     configured(&state)?;
     let _guard = state.communications.lock().await;
+    let mut tx = state.pool.begin().await?;
+    // 连接行锁覆盖批量版本核对与写入，自动发现不能在两者之间恢复来源。
+    sqlx::query("SELECT owner FROM communication_connections WHERE owner='admin' FOR UPDATE")
+        .execute(&mut *tx)
+        .await?;
     let ids = match input.selection {
         Selection::All { revision: expected } => {
-            let sources = snapshot(&state).await?;
+            let sources: Vec<SubscriptionVersion> = sqlx::query_as("SELECT id,version FROM communication_sources WHERE owner='admin' AND subscribed ORDER BY id FOR UPDATE")
+                .fetch_all(&mut *tx).await?;
             if revision(&sources) != expected {
                 return Err(ApiError(
                     StatusCode::CONFLICT,
@@ -88,15 +91,24 @@ pub(super) async fn remove(
                 .collect::<Vec<_>>()
         }
         Selection::One { id, version } => {
-            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_sources WHERE id=$1 AND version=$2 AND owner='admin')")
-                .bind(id).bind(version).fetch_one(&state.pool).await?;
-            if !exists {
+            let current: Option<i64> = sqlx::query_scalar("SELECT version FROM communication_sources WHERE id=$1 AND owner='admin' FOR UPDATE")
+                .bind(id).fetch_optional(&mut *tx).await?;
+            if current != Some(version) {
                 return Err(ApiError(
                     StatusCode::CONFLICT,
                     "communication_source_changed",
                 ));
             }
             vec![id]
+        }
+        Selection::Retained { sources } => {
+            if !input.delete_documents {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_communication_selection",
+                ));
+            }
+            super::retained::selected(&mut tx, sources).await?
         }
     };
     if ids.is_empty() {
@@ -105,11 +117,6 @@ pub(super) async fn remove(
             failed_ids: vec![],
         }));
     }
-    let mut tx = state.pool.begin().await?;
-    // 与私聊自动发现共用连接行锁，跨实例移除也不能被在途发现重新添加。
-    sqlx::query("SELECT owner FROM communication_connections WHERE owner='admin' FOR UPDATE")
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("INSERT INTO communication_exclusions(owner,chat_id) SELECT owner,chat_id FROM communication_sources WHERE id=ANY($1) ON CONFLICT DO NOTHING")
         .bind(&ids).execute(&mut *tx).await?;
     sqlx::query("UPDATE communication_sources SET enabled=false,version=version+1,page_token='',window_start=NULL,window_end=NULL,error=NULL WHERE id=ANY($1)")

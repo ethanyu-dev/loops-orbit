@@ -12,6 +12,14 @@ import {
 import { api, errorText } from '../../api';
 import { SourcePicker } from './SourcePicker';
 import { RemoveSubscriptionDialog, type RemovalTarget } from './RemoveSubscriptionDialog';
+import { RestoreSubscriptionsDialog } from './RestoreSubscriptionsDialog';
+import {
+  MAX_RETAINED_SELECTION,
+  retainedVersions,
+  selectRetained,
+  toggleRetained,
+  type RetainedSelection,
+} from './retainedSelection';
 import type { Snapshot, Source } from './types';
 import './subscriptions.css';
 
@@ -50,6 +58,8 @@ export function SourceManager({
   const [target, setTarget] = useState<RemovalTarget | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [selected, setSelected] = useState<RetainedSelection[]>([]);
+  const [restoreTarget, setRestoreTarget] = useState<RetainedSelection[] | null>(null);
   const subscriptions = data.sources.filter((source) => source.subscribed !== false);
   const retained = data.sources.filter((source) => source.subscribed === false);
   const progress = new Map(data.progress.map((item) => [item.source_id, item]));
@@ -73,7 +83,7 @@ export function SourceManager({
     setNotice('');
     try {
       await api(
-        `/communications/sources${action === 'restore' ? '' : `/${source.id}${action === 'sync' ? '/sync' : ''}`}`,
+        `/communications/sources${action === 'restore' ? '/restore' : `/${source.id}${action === 'sync' ? '/sync' : ''}`}`,
         {
           method: action === 'toggle' ? 'PUT' : 'POST',
           body:
@@ -81,15 +91,16 @@ export function SourceManager({
               ? undefined
               : JSON.stringify(
                   action === 'restore'
-                    ? { chat_id: source.chat_id, label: source.label }
+                    ? { sources: [{ id: source.id, version: source.version }] }
                     : { version: source.version, enabled: !source.enabled },
                 ),
         },
       );
+      setSelected([]);
       await reload();
       setNotice(
         action === 'restore'
-          ? '已重新订阅，保留的资料仍可查看。'
+          ? '已重新订阅，从现在开始采集新消息。遗漏历史可通过“整理历史消息”补录。'
           : action === 'sync'
             ? '已安排同步最新消息。'
             : '已更新同步状态。',
@@ -124,9 +135,38 @@ export function SourceManager({
             : `已移除 ${result.removed} 个订阅，资料已保留。`,
       );
       setTarget(null);
+      setSelected([]);
       await reload();
     } catch (error) {
       setError(`${errorText(error)} 请关闭弹窗，核对最新列表后重试。`);
+      setSelected([]);
+      await reload();
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+  /** 恢复整批确认快照；版本冲突时不自动改用轮询得到的新版本。 */
+  async function restoreSelected() {
+    if (!restoreTarget || lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const result = await api<{ restored: number }>('/communications/sources/restore', {
+        method: 'POST',
+        body: JSON.stringify({ sources: retainedVersions(restoreTarget) }),
+      });
+      setRestoreTarget(null);
+      setSelected([]);
+      setNotice(
+        `已重新订阅 ${result.restored} 个会话，从现在开始采集新消息。遗漏历史可通过“整理历史消息”补录。`,
+      );
+      await reload();
+    } catch (error) {
+      setError(`${errorText(error)} 请关闭弹窗，核对最新列表后重试。`);
+      setSelected([]);
       await reload();
     } finally {
       lock.current = false;
@@ -199,6 +239,7 @@ export function SourceManager({
             aria-pressed={!archived}
             onClick={() => {
               setArchived(false);
+              setSelected([]);
               setPage(0);
             }}
           >
@@ -208,6 +249,7 @@ export function SourceManager({
             aria-pressed={archived}
             onClick={() => {
               setArchived(true);
+              setSelected([]);
               setPage(0);
             }}
           >
@@ -223,6 +265,7 @@ export function SourceManager({
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
+              setSelected([]);
               setPage(0);
             }}
           />
@@ -234,9 +277,52 @@ export function SourceManager({
         </p>
       )}
       {archived && (
-        <p className="subscription-archive-note">
-          这些会话已移除订阅，保留的资料仍可在沟通记录中浏览。
-        </p>
+        <>
+          <p className="subscription-archive-note">
+            这些会话已移除订阅。重新订阅可恢复采集；删除资料会清理本地记录，仍保持不自动订阅。
+          </p>
+          <div className="subscription-batch-actions" aria-label="历史资料批量操作">
+            <span>已选 {selected.length} 个会话</span>
+            <button
+              disabled={busy || !filtered.length}
+              onClick={() => setSelected(selectRetained(filtered))}
+            >
+              {filtered.length > MAX_RETAINED_SELECTION
+                ? `选择前 ${MAX_RETAINED_SELECTION} 个搜索结果`
+                : `全选搜索结果（${filtered.length}）`}
+            </button>
+            <button disabled={busy || !selected.length} onClick={() => setSelected([])}>
+              清空选择
+            </button>
+            <button
+              disabled={busy || !selected.length || data.connection?.status !== 'active'}
+              onClick={() => {
+                setError('');
+                setRestoreTarget([...selected]);
+              }}
+            >
+              批量重新订阅
+            </button>
+            <button
+              className="subscription-remove-all"
+              disabled={busy || !selected.length}
+              onClick={() => {
+                setError('');
+                setTarget({
+                  selection: { scope: 'retained', sources: retainedVersions(selected) },
+                  count: selected.length,
+                  labels: selected.map((source) => source.label),
+                  deleteOnly: true,
+                });
+              }}
+            >
+              批量删除资料
+            </button>
+          </div>
+          <p className="subscription-archive-note">
+            选择可跨页保留，修改搜索或切换列表会清空选择；每次最多处理 1,000 个会话。
+          </p>
+        </>
       )}
       <div className="subscription-list">
         <div className="subscription-columns" aria-hidden="true">
@@ -251,15 +337,30 @@ export function SourceManager({
           return (
             <div className="subscription-item" key={source.id}>
               <div className="subscription-row">
-                <button
-                  className="subscription-name"
-                  aria-expanded={open}
-                  onClick={() => setExpanded(open ? null : source.id)}
-                  title={source.label}
-                >
-                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <span>{source.label}</span>
-                </button>
+                <div className="subscription-name-cell">
+                  {archived && (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择历史会话：${source.label}`}
+                      checked={selected.some((item) => item.id === source.id)}
+                      disabled={
+                        busy ||
+                        (selected.length >= MAX_RETAINED_SELECTION &&
+                          !selected.some((item) => item.id === source.id))
+                      }
+                      onChange={() => setSelected(toggleRetained(selected, source))}
+                    />
+                  )}
+                  <button
+                    className="subscription-name"
+                    aria-expanded={open}
+                    onClick={() => setExpanded(open ? null : source.id)}
+                    title={source.label}
+                  >
+                    {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    <span>{source.label}</span>
+                  </button>
+                </div>
                 <span
                   className={`subscription-status ${source.error && source.enabled ? 'failed' : ''}`}
                 >
@@ -374,6 +475,15 @@ export function SourceManager({
           error={error}
           onClose={() => setTarget(null)}
           onConfirm={(deleteDocuments) => void remove(deleteDocuments)}
+        />
+      )}
+      {restoreTarget && (
+        <RestoreSubscriptionsDialog
+          sources={restoreTarget}
+          busy={busy}
+          error={error}
+          onClose={() => setRestoreTarget(null)}
+          onConfirm={() => void restoreSelected()}
         />
       )}
     </section>
