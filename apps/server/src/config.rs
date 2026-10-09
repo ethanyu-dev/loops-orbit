@@ -28,6 +28,10 @@ pub struct Config {
     pub communications: Option<crate::communications::Config>,
     /// 独立的 Linear 个人 API Key 配置。
     pub linear: Option<crate::linear::Config>,
+    /// 可接管问题的独立 JSON 文件路径，相对路径以进程工作目录为基准。
+    pub takeover_questions_file: std::path::PathBuf,
+    /// 可选 Jev 判断服务，仅用于个人消息接管。
+    pub typesafe: Option<crate::communications::takeover::Config>,
 }
 
 /// 飞书自建应用配置，白名单限制个人服务的访问者。
@@ -104,6 +108,10 @@ impl Config {
         );
         Ok(Self {
             linear: crate::linear::Config::from_env()?,
+            typesafe: crate::communications::takeover::Config::from_env()?,
+            takeover_questions_file: env::var("TAKEOVER_QUESTIONS_FILE")
+                .unwrap_or_else(|_| "config/takeover-questions.json".into())
+                .into(),
             communications,
             followup_timezone,
             database_url: required("DATABASE_URL")?,

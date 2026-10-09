@@ -107,9 +107,15 @@ async fn apply(state: &AppState, candidate: &Candidate, data: &Value) -> ApiResu
             .await?;
     }
     let capped = more && candidate.discovery_pages + 1 >= MAX_PAGES;
+    let takeover: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_takeover_settings WHERE owner='admin' AND enabled)").fetch_one(&mut *tx).await?;
+    let discovery_seconds = if takeover {
+        super::takeover::POLL_SECONDS as f64
+    } else {
+        DISCOVERY_SECONDS
+    };
     sqlx::query("UPDATE communication_connections SET discovery_cursor=$2,discovery_pages=$3,discovery_error=$4,next_discovery=now()+make_interval(secs=>$5) WHERE owner=$1")
         .bind(&candidate.owner).bind(if capped { "" } else { next }).bind(if more && !capped { candidate.discovery_pages + 1 } else { 0 })
-        .bind(capped.then_some("communication_discovery_limit")).bind(if more && !capped { 2.0 } else { DISCOVERY_SECONDS }).execute(&mut *tx).await?;
+        .bind(capped.then_some("communication_discovery_limit")).bind(if more && !capped { 2.0 } else { discovery_seconds }).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(())
 }

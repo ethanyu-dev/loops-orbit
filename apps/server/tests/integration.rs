@@ -199,6 +199,9 @@ impl Harness {
             axum::serve(listener, upstream).await.unwrap();
         });
         let config = Config {
+            typesafe: None,
+            takeover_questions_file: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../config/takeover-questions.json"),
             linear: None,
             communications: None,
             memory: None,

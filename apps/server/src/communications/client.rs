@@ -87,6 +87,9 @@ pub(super) async fn exchange(
         Tokens {
             access_token,
             refresh_token,
+            scopes: value["scope"]
+                .as_str()
+                .map(|scope| scope.split_whitespace().map(str::to_owned).collect()),
         },
         Utc::now() + Duration::seconds(expiry),
         Utc::now() + Duration::seconds(refresh_expiry),
@@ -135,7 +138,7 @@ pub(super) async fn access(state: &AppState) -> ApiResult<String> {
         json!({"grant_type":"refresh_token","refresh_token":tokens.refresh_token}),
     )
     .await;
-    let (tokens, expires, refresh_expires) = match result {
+    let (mut refreshed, expires, refresh_expires) = match result {
         Ok(result) => result,
         Err(error) => {
             // 刷新请求可能已经消耗旧令牌；标记重连比重复消费一次性凭证更可靠。
@@ -148,9 +151,24 @@ pub(super) async fn access(state: &AppState) -> ApiResult<String> {
             return Err(error);
         }
     };
-    sqlx::query("UPDATE communication_connections SET credentials=$1,expires_at=$2,refresh_expires_at=$3 WHERE owner='admin'").bind(crypto::seal(state,&tokens)?).bind(expires).bind(refresh_expires).execute(&mut *tx).await?;
+    // 刷新响应省略范围时沿用已授权范围；明确返回较小范围时取消发送能力。
+    if refreshed.scopes.is_none() {
+        refreshed.scopes = tokens.scopes;
+    }
+    let send_authorized = ["im:message", "im:message.send_as_user"]
+        .iter()
+        .all(|scope| {
+            refreshed
+                .scopes
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|s| s == scope)
+        });
+    sqlx::query("UPDATE communication_connections SET credentials=$1,expires_at=$2,refresh_expires_at=$3,send_authorized=send_authorized AND $4 WHERE owner='admin'")
+        .bind(crypto::seal(state,&refreshed)?).bind(expires).bind(refresh_expires).bind(send_authorized).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(tokens.access_token)
+    Ok(refreshed.access_token)
 }
 /// 所有采集调用只访问固定的飞书根地址和代码指定路径。
 pub(super) fn get(state: &AppState, path: &str, token: &str) -> reqwest::RequestBuilder {

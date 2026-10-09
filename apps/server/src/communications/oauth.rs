@@ -163,6 +163,20 @@ async fn connect(state: &AppState, code: &str) -> ApiResult<()> {
     }
     sqlx::query("INSERT INTO communication_connections(owner,open_id,name,credentials,expires_at,refresh_expires_at) VALUES('admin',$1,$2,$3,$4,$5) ON CONFLICT(owner) DO UPDATE SET name=excluded.name,credentials=excluded.credentials,expires_at=excluded.expires_at,refresh_expires_at=excluded.refresh_expires_at,status='active',version=communication_connections.version+1,discovery_cursor='',discovery_pages=0,next_discovery=now(),discovery_error=NULL")
         .bind(open_id).bind(name).bind(crypto::seal(state,&tokens)?).bind(expires).bind(refresh_expires).execute(&mut *tx).await?;
+    let send_authorized = ["im:message", "im:message.send_as_user"]
+        .iter()
+        .all(|scope| {
+            tokens
+                .scopes
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|s| s == scope)
+        });
+    sqlx::query("UPDATE communication_connections SET send_authorized=$1 WHERE owner='admin'")
+        .bind(send_authorized)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }

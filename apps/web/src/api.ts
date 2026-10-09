@@ -2,6 +2,13 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
+  invalid_takeover_settings: '接管阈值应为 0.5 至 1。',
+  takeover_rules_unreadable: '无法读取问题文件，请检查文件路径和读取权限。',
+  takeover_rules_invalid:
+    '问题文件格式无效：需为 JSON questions 数组，包含 1 至 20 条不重复的非空问题，每条最多 500 字。',
+  takeover_settings_changed: '问题文件或接管设置已修改，请重新载入后编辑。',
+  takeover_not_ready: '请先配置 Jev，并重新授权飞书用户发送权限。',
+
   linear_disabled: '服务端尚未配置 LINEAR_API_KEY。',
   linear_invalid_key: 'Linear 个人 API Key 已失效，请检查服务端配置后重新连接。',
   linear_permission_denied: 'Linear 拒绝访问，请检查个人 API Key 权限及团队访问范围。',

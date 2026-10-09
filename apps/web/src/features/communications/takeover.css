@@ -1,0 +1,51 @@
+.takeover-workspace {
+  display: grid;
+  gap: 20px;
+}
+.takeover-form {
+  display: grid;
+  gap: 14px;
+}
+.takeover-form label {
+  display: grid;
+  gap: 8px;
+}
+.takeover-rules {
+  overflow-wrap: anywhere;
+}
+.takeover-rules li + li {
+  margin-top: 8px;
+}
+.takeover-form input[type='number'] {
+  max-width: 150px;
+}
+.takeover-form .takeover-toggle {
+  display: flex;
+  align-items: center;
+}
+.takeover-toggle input {
+  width: auto;
+}
+.takeover-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.takeover-jobs {
+  padding: 0;
+  list-style: none;
+}
+.takeover-jobs li {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.takeover-jobs li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.takeover-answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
