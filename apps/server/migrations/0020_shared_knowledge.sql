@@ -58,4 +58,3 @@ BEGIN
 END $$;
 CREATE TRIGGER knowledge_publication_changed AFTER INSERT OR UPDATE OR DELETE ON knowledge_entries
 FOR EACH ROW EXECUTE FUNCTION invalidate_shared_knowledge();
-
