@@ -7,13 +7,15 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::rules::Rules;
+use super::{rules::Rules, self_chat};
 
 /// 设置版本同时绑定候选队列；不能将旧规则下生成的答案用于新规则。
 #[derive(Clone, Serialize, sqlx::FromRow)]
 pub(super) struct Settings {
     /// 仅影响新消息，默认关闭。
     pub enabled: bool,
+    /// 仅由向已授权本人发送提示的响应建立，不接受前端指定会话。
+    pub self_test_chat_id: Option<String>,
     /// 文件中可接管问题的快照，不能通过管理接口修改。
     pub topics: Value,
     /// Jev 肯定概率下限，不是字符串或向量相似度。
@@ -33,6 +35,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
+            self_test_chat_id: None,
             topics: json!([]),
             threshold: 0.9,
             version: 0,
@@ -45,13 +48,13 @@ impl Default for Settings {
 /// 在行锁内读取文件并更新快照；范围变化会废弃旧队列，不因读页面启用接管。
 pub(super) async fn load(state: &AppState) -> ApiResult<Settings> {
     let mut tx = state.pool.begin().await?;
-    let stored: Option<Settings> = sqlx::query_as("SELECT enabled,topics,threshold,version,since_ms FROM communication_takeover_settings WHERE owner='admin' FOR UPDATE")
+    let stored: Option<Settings> = sqlx::query_as("SELECT enabled,self_test_chat_id,topics,threshold,version,since_ms FROM communication_takeover_settings WHERE owner='admin' FOR UPDATE")
         .fetch_optional(&mut *tx).await?;
     let rules = Rules::load(&state.config.takeover_questions_file);
     let topics = json!(rules.questions);
     let mut settings = stored.clone().unwrap_or_default();
     if stored.is_some() && settings.topics != topics {
-        settings = sqlx::query_as("UPDATE communication_takeover_settings SET topics=$1,version=version+1,since_ms=(extract(epoch FROM clock_timestamp())*1000)::bigint WHERE owner='admin' RETURNING enabled,topics,threshold,version,since_ms")
+        settings = sqlx::query_as("UPDATE communication_takeover_settings SET topics=$1,version=version+1,since_ms=(extract(epoch FROM clock_timestamp())*1000)::bigint WHERE owner='admin' RETURNING enabled,self_test_chat_id,topics,threshold,version,since_ms")
             .bind(&topics).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE communication_takeover_jobs SET status='ignored',reason='rules_changed',updated_at=now() WHERE status IN ('queued','evaluating')").execute(&mut *tx).await?;
     }
@@ -80,6 +83,9 @@ pub(crate) async fn read(
 pub(crate) struct Input {
     /// 管理员显式启用。
     enabled: bool,
+    /// 显式订阅自聊并按外部提问者测试；旧客户端默认关闭。
+    #[serde(default)]
+    self_test_enabled: bool,
     /// 开启前确认页面展示的问题版本；关闭不依赖有效文件。
     rules_revision: Option<String>,
     /// 自动判断所需的肯定概率。
@@ -111,6 +117,13 @@ pub(crate) async fn save(
             return Err(ApiError(StatusCode::CONFLICT, "takeover_settings_changed"));
         }
     }
+    // 凭证刷新也锁连接行，必须在设置事务取得行锁之前完成。
+    let token = if input.enabled && input.self_test_enabled && settings.self_test_chat_id.is_none()
+    {
+        Some(super::super::client::access(&state).await?)
+    } else {
+        None
+    };
     let mut tx = state.pool.begin().await?;
     let authorized: Option<bool> = sqlx::query_scalar("SELECT status='active' AND send_authorized FROM communication_connections WHERE owner='admin' FOR UPDATE").fetch_optional(&mut *tx).await?;
     let authorized = authorized.ok_or(ApiError(
@@ -133,8 +146,30 @@ pub(crate) async fn save(
     if input.enabled && (rules.error.is_some() || rules.revision != settings.rules_revision) {
         return Err(ApiError(StatusCode::CONFLICT, "takeover_settings_changed"));
     }
-    sqlx::query("INSERT INTO communication_takeover_settings(owner,enabled,topics,threshold,version) VALUES('admin',$1,$2,$3,1) ON CONFLICT(owner) DO UPDATE SET enabled=excluded.enabled,topics=excluded.topics,threshold=excluded.threshold,version=communication_takeover_settings.version+1,since_ms=(extract(epoch FROM clock_timestamp())*1000)::bigint")
-        .bind(input.enabled).bind(json!(rules.questions)).bind(input.threshold).execute(&mut *tx).await?;
+    let self_test_chat_id = if input.enabled && input.self_test_enabled {
+        let chat_id = match settings.self_test_chat_id {
+            Some(chat_id) => chat_id,
+            None => {
+                let open_id: String = sqlx::query_scalar(
+                    "SELECT open_id FROM communication_connections WHERE owner='admin'",
+                )
+                .fetch_one(&mut *tx)
+                .await?;
+                self_chat::bind(
+                    &state,
+                    &open_id,
+                    token.as_deref().expect("启用前已读取凭证"),
+                )
+                .await?
+            }
+        };
+        self_chat::subscribe(&mut tx, &chat_id).await?;
+        Some(chat_id)
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO communication_takeover_settings(owner,enabled,topics,threshold,version,self_test_chat_id) VALUES('admin',$1,$2,$3,1,$4) ON CONFLICT(owner) DO UPDATE SET enabled=excluded.enabled,topics=excluded.topics,threshold=excluded.threshold,self_test_chat_id=excluded.self_test_chat_id,version=communication_takeover_settings.version+1,since_ms=(extract(epoch FROM clock_timestamp())*1000)::bigint")
+        .bind(input.enabled).bind(json!(rules.questions)).bind(input.threshold).bind(self_test_chat_id).execute(&mut *tx).await?;
     sqlx::query("UPDATE communication_takeover_jobs SET status='ignored',reason='settings_changed',updated_at=now() WHERE status IN ('queued','evaluating')").execute(&mut *tx).await?;
     if input.enabled {
         sqlx::query("UPDATE communication_sources SET next_sync=now() WHERE enabled AND subscribed AND chat_mode='p2p'").execute(&mut *tx).await?;

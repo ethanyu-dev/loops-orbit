@@ -32,9 +32,9 @@ struct Job {
     /// 管理员确认的话题和开关版本。
     settings_version: i64,
 }
-/// 只处理新鲜真人文本；本人、机器人、未知身份和旧消息均不能触发自动外发。
-fn eligible(message: &Message, since_ms: i64, now: i64) -> bool {
-    !message.is_me
+/// 只处理新鲜真人文本；本人仅在已绑定的自聊测试中放行，机器人和旧消息仍排除。
+fn eligible(message: &Message, since_ms: i64, now: i64, self_test: bool) -> bool {
+    (!message.is_me || self_test)
         && !message.deleted
         && message.sender_type == "user"
         && message.sender_id_type == "open_id"
@@ -67,18 +67,25 @@ pub(crate) async fn enqueue(
     if !settings.enabled || settings.rules_error.is_some() {
         return Ok(());
     }
-    let generation: Option<Uuid> = sqlx::query_scalar("SELECT private_discovery_generation FROM communication_connections WHERE owner='admin' AND version=$1 AND status='active' AND send_authorized").bind(connection_version).fetch_optional(&state.pool).await?;
-    let Some(generation) = generation else {
+    let connection: Option<(Uuid, String)> = sqlx::query_as("SELECT private_discovery_generation,open_id FROM communication_connections WHERE owner='admin' AND version=$1 AND status='active' AND send_authorized").bind(connection_version).fetch_optional(&state.pool).await?;
+    let Some((generation, open_id)) = connection else {
         return Ok(());
     };
+    let self_test = settings.self_test_chat_id.as_deref() == Some(source.chat_id.as_str());
     let now = Utc::now().timestamp_millis();
     let own_latest = messages
         .iter()
-        .filter(|m| m.is_me)
+        .filter(|m| m.is_me && !self_test)
         .map(|m| m.create_time)
         .max();
     for message in messages {
-        if eligible(message, settings.since_ms, now)
+        if message.chat_id == source.chat_id
+            && eligible(
+                message,
+                settings.since_ms,
+                now,
+                self_test && message.sender_id == open_id,
+            )
             && own_latest.is_none_or(|at| at < message.create_time)
         {
             sqlx::query("INSERT INTO communication_takeover_jobs(id,source_id,message_id,source_version,connection_version,connection_generation,settings_version,message) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(source_id,message_id) DO NOTHING")
@@ -126,7 +133,12 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
     }
     let message: Message =
         serde_json::from_value(job.message.clone()).map_err(super::super::unavailable)?;
-    if !eligible(&message, settings.since_ms, Utc::now().timestamp_millis()) {
+    if !eligible(
+        &message,
+        settings.since_ms,
+        Utc::now().timestamp_millis(),
+        settings.self_test_chat_id.as_deref() == Some(message.chat_id.as_str()),
+    ) {
         return Ok("expired");
     }
     let topics: Vec<String> =
@@ -247,16 +259,16 @@ mod tests {
     fn excludes_self_history_bots_and_agent_messages() {
         let now = Utc::now().timestamp_millis();
         let mut message: Message = serde_json::from_value(json!({"message_id":"om_test","chat_id":"oc_test","sender_id":"ou_other","sender_id_type":"open_id","sender_type":"user","is_me":false,"create_time":now-10,"update_time":now-10,"message_type":"text","deleted":false,"text":"申请 novita 测试环境权限","payload":{}})).unwrap();
-        assert!(eligible(&message, now - 100, now));
-        assert!(!eligible(&message, now, now));
-        assert!(!eligible(&message, 0, now + MAX_AGE_MS));
+        assert!(eligible(&message, now - 100, now, false));
+        assert!(!eligible(&message, now, now, false));
+        assert!(!eligible(&message, 0, now + MAX_AGE_MS, false));
         message.is_me = true;
-        assert!(!eligible(&message, 0, now));
+        assert!(!eligible(&message, 0, now, false));
         message.is_me = false;
         message.sender_type = "app".into();
-        assert!(!eligible(&message, 0, now));
+        assert!(!eligible(&message, 0, now, false));
         message.sender_type = "user".into();
         message.text = "[agent] 申请 novita 测试环境权限".into();
-        assert!(!eligible(&message, 0, now));
+        assert!(!eligible(&message, 0, now, false));
     }
 }

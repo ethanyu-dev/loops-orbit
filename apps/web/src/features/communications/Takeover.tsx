@@ -41,6 +41,8 @@ interface Snapshot {
   settings: {
     /** 显式启用开关。 */
     enabled: boolean;
+    /** 服务端验证并绑定的本人自聊；空值表示测试关闭。 */
+    self_test_chat_id: string | null;
     /** 允许接管的标准问题。 */
     topics: string[];
     /** 匹配与回答复核的概率下限。 */
@@ -79,6 +81,7 @@ interface Snapshot {
 export function Takeover({ report }: { report: (e: unknown) => void }) {
   const [data, setData] = useState<Snapshot | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const [selfTest, setSelfTest] = useState(false);
   const [rulesRevision, setRulesRevision] = useState('');
   const [threshold, setThreshold] = useState('0.9');
   const [version, setVersion] = useState(0);
@@ -91,6 +94,7 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
       const next = await api<Snapshot>('/communications/takeover');
       setData(next);
       setEnabled(next.settings.enabled);
+      setSelfTest(!!next.settings.self_test_chat_id);
       setRulesRevision(next.settings.rules_revision);
       setThreshold(String(next.settings.threshold));
       setVersion(next.settings.version);
@@ -126,6 +130,7 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
         method: 'PUT',
         body: JSON.stringify({
           enabled,
+          self_test_enabled: enabled && selfTest,
           rules_revision: rulesRevision,
           threshold: Number(threshold),
           version,
@@ -183,6 +188,20 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
           />
           允许 agent 以我的身份回复匹配的问题
         </label>
+        <label className="takeover-toggle">
+          <input
+            type="checkbox"
+            checked={selfTest}
+            disabled={busy || !enabled}
+            onChange={(e) => setSelfTest(e.target.checked)}
+          />
+          自聊测试：将我发给自己的问题按他人询问处理
+        </label>
+        <p>
+          首次开启或关闭后重新开启并保存，会以你的身份向自己发送一条测试提示，并订阅这段自聊的新消息。
+          保存成功后，在飞书打开自己的聊天，发送下方允许的问题即可测试。仅使用已发布的通用知识，保留同样的话题判断、回答复核和回复频率限制。
+          你发给其他联系人的消息不会触发测试；关闭测试不会删除已采集资料。
+        </p>
         <section className="takeover-rules" aria-label="允许接管的问题">
           <h3>允许接管的问题</h3>
           <p>

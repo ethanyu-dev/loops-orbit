@@ -353,3 +353,67 @@ async fn private_discovery_preserves_opt_outs_and_later_boundaries() {
     server.abort();
     h.close().await;
 }
+
+// 验证停止信号不会丢弃正在执行的采集步骤，且结束后可正常删除已提交来源；不模拟进程强杀或真实飞书。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn communication_shutdown_drains_active_step_before_reusing_pool() {
+    let (h, fixture, server) = setup().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let gate = Arc::new(MessageGate {
+        arrived: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    {
+        let mut fixture = fixture.lock().unwrap();
+        fixture.private_gate = Some(gate.clone());
+        fixture.private_pages = vec![page(
+            json!([{"chat_id":"oc_fixture","name":"停止时提交","chat_mode":"p2p"}]),
+            false,
+            "",
+        )];
+    }
+    let (stop, receiver) = tokio::sync::watch::channel(false);
+    let mut worker = tokio::spawn(communications::sync::run(h.state.clone(), receiver));
+    tokio::time::timeout(Duration::from_secs(5), gate.arrived.notified())
+        .await
+        .unwrap();
+    stop.send(true).unwrap();
+    // 此超时验证“上游尚未释放时不得宣告停止”，不是用固定睡眠猜测请求是否到达。
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut worker)
+            .await
+            .is_err()
+    );
+    gate.release.notify_one();
+    tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .unwrap()
+        .unwrap();
+    let source: Uuid =
+        sqlx::query_scalar("SELECT id FROM communication_sources WHERE chat_id='oc_fixture'")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        h.request(
+            "DELETE",
+            &format!("/api/communications/sources/{source}"),
+            Some(&cookie),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_sources")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    server.abort();
+    h.close().await;
+}

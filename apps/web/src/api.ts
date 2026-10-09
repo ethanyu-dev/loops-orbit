@@ -15,6 +15,8 @@ const ERRORS: Record<string, string> = {
   takeover_rules_invalid:
     '问题文件格式无效：需为 JSON questions 数组，包含 1 至 20 条不重复的非空问题，每条最多 500 字。',
   takeover_settings_changed: '问题文件或接管设置已修改，请重新载入后编辑。',
+  takeover_self_chat_unverified: '未能确认本人自聊，测试未开启。请检查飞书发送权限后重试。',
+  takeover_self_chat_removing: '本人自聊资料正在清理，请完成后再开启测试。',
   takeover_not_ready: '请先配置 Jev，并重新授权飞书用户发送权限。',
 
   linear_disabled: '服务端尚未配置 LINEAR_API_KEY。',
