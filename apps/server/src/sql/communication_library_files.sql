@@ -1,5 +1,5 @@
 SELECT d.id, d.source_id, s.label AS source_label, s.enabled AS source_enabled, s.subscribed AS source_subscribed,
-       d.day, d.version, d.extraction_version, d.summary_hash, d.summary_error, COALESCE(p.images_failed, 0) AS images_failed, COALESCE(p.status='errors', false) AS processing_failed
+       d.day, d.version, d.extraction_version, d.summary_hash, d.summary_error, d.summary_status, d.summary_attempts, COALESCE(p.images_failed, 0) AS images_failed, COALESCE(p.status='errors', false) AS processing_failed
 FROM communication_documents d
 JOIN communication_sources s ON s.id = d.source_id
 LEFT JOIN communication_document_progress p ON p.document_id=d.id AND p.version=d.version

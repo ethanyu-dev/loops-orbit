@@ -33,10 +33,14 @@ export interface Document {
   day: string;
   /** 引用绑定版本。 */
   version: number;
-  /** 有值表示已完成整理。 */
+  /** 有值表示存在已核验条目；是否完整完成由 summary_status 区分。 */
   summary_hash: string | null;
   /** 摘要故障分类。 */
   summary_error: string | null;
+  /** 新服务返回显式执行状态，兼容旧服务缺少该字段。 */
+  summary_status?: 'pending' | 'running' | 'retry_wait' | 'ready' | 'partial' | 'failed';
+  /** 当前版本已执行次数。 */
+  summary_attempts?: number;
   /** 当前版本的失败图片数，由后台核对快照提供。 */
   images_failed?: number;
   /** 当前后台快照报告的资料处理失败。 */
@@ -65,12 +69,21 @@ export interface Item {
 export interface Detail {
   /** 文档所属会话的可读名称。 */
   source_label?: string;
+  /** 暂停或删除中的来源不能重新整理。 */
+  source_enabled?: boolean;
   /** 旧资料正在按个人关联规则重新处理。 */
   processing?: boolean;
   /** 文件版本。 */
   document: Document;
   /** 尚未完成整理时为空。 */
-  summary: { items: Item[]; unsupported_count: number; message_count: number } | null;
+  summary: {
+    items: Item[];
+    unsupported_count: number;
+    message_count: number;
+    /** 未通过核验的候选与未完成的消息分块数，旧摘要默认视为零。 */
+    rejected_count?: number;
+    failed_chunk_count?: number;
+  } | null;
   /** 原始记录总数。 */
   total: number;
   /** 当前页原文，附件仅显示类型。 */
@@ -129,6 +142,8 @@ export interface Snapshot {
     /** 尚未完成后台复核的资料，不混同于模型待整理。 */
     checking: number;
     ready: number;
+    /** 有合格结果但存在未核验内容的天数。 */
+    partial?: number;
     summarizing: number;
     indexing: number;
     errors: number;

@@ -12,6 +12,8 @@ const ERRORS: Record<string, string> = {
   communication_disabled: '服务端尚未启用飞书沟通采集。',
   communication_not_connected: '请先连接你的飞书账号。',
   communication_reauthorize: '飞书授权已失效，请重新连接。',
+  communication_summary_source_inactive: '来源已暂停、正在删除或尚未完成核对，暂时不能重新整理。',
+  communication_summary_retry_unavailable: '当前状态不需要重新整理，请刷新查看结果。',
   communication_source_changed: '资料已被更新、暂停或遗忘，请重新打开后确认。',
   invalid_history_range: '请选择有效日期范围，单次最多一年，开始日期不能晚于今天。',
   invalid_communication_source: '请选择有效的飞书会话和显示名称。',

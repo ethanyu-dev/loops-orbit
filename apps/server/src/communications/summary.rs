@@ -1,5 +1,5 @@
 use super::{
-    DOCUMENT_COLUMNS, Document,
+    Document,
     store::{self, Message},
     unavailable,
 };
@@ -52,6 +52,12 @@ pub struct Summary {
     pub image_notes: Vec<super::images::Note>,
     /// 已通过证据校验的整理条目.
     pub items: Vec<Item>,
+    /// 一次纠错后仍未核验的候选数，不包含已经通过的条目。
+    #[serde(default)]
+    pub rejected_count: usize,
+    /// 未能取得有效候选数组的分块数，不能暗示这些消息已处理。
+    #[serde(default)]
+    pub failed_chunk_count: usize,
 }
 /// 校验出处存在、引文精确匹配、承诺归属一致，不声称机器校验能证明语义蕴含。
 fn evidence<'a>(item: &Item, messages: &'a [Message]) -> ApiResult<&'a Message> {
@@ -70,11 +76,17 @@ fn evidence<'a>(item: &Item, messages: &'a [Message]) -> ApiResult<&'a Message> 
     }
     let source = messages
         .iter()
-        .find(|m| m.message_id == item.message_id && !m.deleted && m.text.contains(&item.quote))
+        .find(|m| m.message_id == item.message_id && !m.deleted)
         .ok_or(ApiError(
             StatusCode::BAD_GATEWAY,
-            "communication_summary_invalid_quote",
+            "communication_summary_unknown_message",
         ))?;
+    if !source.text.contains(&item.quote) {
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_summary_quote_mismatch",
+        ));
+    }
     if (item.kind == "my_commitment" && !source.is_me)
         || (item.kind == "their_commitment" && (source.is_me || source.sender_type != "user"))
     {
@@ -98,48 +110,41 @@ pub(crate) fn validate_stored(summary: &Summary, messages: &[Message]) -> ApiRes
     }
     Ok(())
 }
-/// 每次只处理一份待整理日文件，失败退避，重启后继续。
-pub(super) async fn step(state: &AppState) -> ApiResult<bool> {
-    let sql = format!(
-        "SELECT {DOCUMENT_COLUMNS} FROM communication_documents WHERE extraction_version=1 AND summary_hash IS NULL AND next_summary<=now() AND source_id IN(SELECT id FROM communication_sources WHERE enabled) ORDER BY next_summary LIMIT 1"
-    );
-    let Some(doc): Option<Document> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .fetch_optional(&state.pool)
-        .await?
-    else {
-        return Ok(false);
-    };
-    // 图片解读或原文更新会推进版本并重新排队；旧候选不能覆盖新版本的立即重试时间。
-    let claimed = sqlx::query(
-        "UPDATE communication_documents SET next_summary=now()+interval '5 minutes' WHERE id=$1 AND version=$2 AND summary_hash IS NULL AND next_summary<=now()",
-    )
-    .bind(doc.id)
-    .bind(doc.version)
-    .execute(&state.pool)
-    .await?;
-    if claimed.rows_affected() == 0 {
-        return Ok(false);
-    }
-    let result = generate(state, &doc).await;
-    if let Err(error) = result {
-        sqlx::query("UPDATE communication_documents SET summary_error=$2 WHERE id=$1 AND version=$3 AND summary_hash IS NULL").bind(doc.id).bind(error.1).bind(doc.version).execute(&state.pool).await?;
-    }
-    Ok(true)
+/// 生成阶段只保留稳定分类和可重试标识，不把原文或模型输出写入日志。
+pub(super) struct Outcome {
+    /// 合格条目及未覆盖范围；空且不完整时不能保存为“未发现事项”。
+    pub summary: Summary,
+    /// 部分或全部失败的首个原因。
+    pub error: Option<&'static str>,
+    /// 仅全部失败且属于临时供应商故障时允许重新执行。
+    pub retryable: bool,
 }
-/// 模型在锁外计算，重新拿锁后比较原文版本；旧摘要永不覆盖更新或撤回。
-async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
+/// 纠错结果必须绑定原候选序号，不能混入未请求的新条目。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Repair {
+    /// 初次输出数组中的位置。
+    index: usize,
+    /// 空值表示无法修复，仍计入未核验范围。
+    item: Option<Item>,
+}
+
+/// 在锁外生成候选，调用方持锁复核版本后才能写入派生文件。
+pub(super) async fn generate(state: &AppState, doc: &Document) -> ApiResult<Outcome> {
     let raw = {
         let _guard = state.communications.lock().await;
         store::raw(state, doc)?
     };
-    let mut chunks: Vec<Vec<&Message>> = vec![];
+    let mut chunks: Vec<Vec<Message>> = vec![];
     let mut bytes = 0;
     let mut unsupported = 0;
     for message in &raw {
         if message.deleted {
             continue;
         }
-        let size=serde_json::to_vec(&json!({"message_id":message.message_id,"sender_id":message.sender_id,"sender_name":message.display_name(),"sender_type":message.sender_type,"is_me":message.is_me,"create_time":message.create_time,"text":message.text})).map_err(unavailable)?.len();
+        let size = serde_json::to_vec(&model_message(message))
+            .map_err(unavailable)?
+            .len();
         if message.text.trim().is_empty() || size > CHUNK_BYTES {
             unsupported += 1;
             continue;
@@ -148,57 +153,185 @@ async fn generate(state: &AppState, doc: &Document) -> ApiResult<()> {
             chunks.push(vec![]);
             bytes = 0;
         }
-        chunks.last_mut().expect("已有分块").push(message);
+        chunks.last_mut().expect("已有分块").push(message.clone());
         bytes += size;
     }
-    let mut items = vec![];
-    for chunk in chunks {
-        let input:Vec<Value>=chunk.iter().map(|m| json!({"message_id":m.message_id,"sender_id":m.sender_id,"sender_name":m.display_name(),"sender_type":m.sender_type,"is_me":m.is_me,"create_time":m.create_time,"text":m.text})).collect();
-        let value = state
+    let mut outcome = Outcome {
+        summary: Summary {
+            raw_hash: doc.raw_hash.clone(),
+            message_count: raw.len(),
+            unsupported_count: unsupported,
+            image_notes: vec![],
+            items: vec![],
+            rejected_count: 0,
+            failed_chunk_count: 0,
+        },
+        error: None,
+        retryable: true,
+    };
+    let chunk_count = chunks.len();
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+        let input: Vec<Value> = chunk.iter().map(model_message).collect();
+        let value = match state
             .runtime
             .summarize_communications(&json!({"messages":input}))
             .await
-            .map_err(|error| ApiError(StatusCode::BAD_GATEWAY, error.code))?;
-        let mut candidates: Vec<Item> = serde_json::from_value(value).map_err(|_| {
-            ApiError(
-                StatusCode::BAD_GATEWAY,
+        {
+            Ok(value) => value,
+            Err(error) => {
+                let transient = error.retryable
+                    && matches!(
+                        error.code,
+                        "provider_rejected" | "provider_unreachable" | "provider_read_failed"
+                    );
+                outcome.fail_chunk(doc, chunk_index, error.code, transient);
+                // 连接、限流或供应商拒绝通常影响整批请求；停止本轮，避免对剩余分块连续冲击上游。
+                if matches!(
+                    error.code,
+                    "provider_rejected" | "provider_unreachable" | "provider_read_failed"
+                ) {
+                    outcome.summary.failed_chunk_count += chunk_count - chunk_index - 1;
+                    break;
+                }
+                continue;
+            }
+        };
+        let Some(candidates) = value.as_array() else {
+            outcome.fail_chunk(
+                doc,
+                chunk_index,
                 "communication_summary_invalid_format",
-            )
-        })?;
+                false,
+            );
+            continue;
+        };
         if candidates.len() > MAX_ITEMS_PER_CHUNK {
-            return Err(ApiError(
-                StatusCode::BAD_GATEWAY,
+            outcome.fail_chunk(
+                doc,
+                chunk_index,
                 "communication_summary_too_many_items",
-            ));
+                false,
+            );
+            continue;
         }
-        let allowed: Vec<Message> = chunk.into_iter().cloned().collect();
-        for item in &mut candidates {
-            let source = evidence(item, &allowed)?;
-            item.sender_id = source.sender_id.clone();
-            item.is_me = source.is_me;
-            item.create_time = source.create_time;
+        let mut rejected = vec![];
+        let mut rejection_code = None;
+        for (index, value) in candidates.iter().enumerate() {
+            match checked(value.clone(), &chunk) {
+                Ok(item) => outcome.summary.items.push(item),
+                Err(error) => {
+                    log_failure(doc, chunk_index, Some(index), error.1);
+                    rejection_code.get_or_insert(error.1);
+                    rejected.push(json!({"index":index,"candidate":value,"error":error.1}));
+                }
+            }
         }
-        items.extend(candidates);
+        if rejected.is_empty() {
+            continue;
+        }
+        // 每块最多一次纠错；已通过的条目不会再次发送或被替换。
+        let mut unresolved: std::collections::BTreeSet<usize> = rejected
+            .iter()
+            .map(|v| v["index"].as_u64().expect("候选序号") as usize)
+            .collect();
+        match state
+            .runtime
+            .repair_communication_summary(&json!({"messages":input,"rejected":rejected}))
+            .await
+        {
+            Ok(value) => {
+                // 整体协议错误不能部分解释，尤其不能以重复序号覆盖已通过的修复。
+                if let Ok(repairs) = serde_json::from_value::<Vec<Repair>>(value) {
+                    let indices: std::collections::BTreeSet<_> =
+                        repairs.iter().map(|r| r.index).collect();
+                    if repairs.len() <= MAX_ITEMS_PER_CHUNK
+                        && indices.len() == repairs.len()
+                        && indices.is_subset(&unresolved)
+                    {
+                        for repair in repairs {
+                            let Some(mut item) = repair.item else {
+                                continue;
+                            };
+                            match hydrate(&mut item, &chunk) {
+                                Ok(()) => {
+                                    unresolved.remove(&repair.index);
+                                    outcome.summary.items.push(item);
+                                }
+                                Err(error) => {
+                                    log_failure(doc, chunk_index, Some(repair.index), error.1)
+                                }
+                            }
+                        }
+                    } else {
+                        log_failure(
+                            doc,
+                            chunk_index,
+                            None,
+                            "communication_summary_invalid_repair",
+                        );
+                    }
+                } else {
+                    log_failure(
+                        doc,
+                        chunk_index,
+                        None,
+                        "communication_summary_invalid_repair",
+                    );
+                }
+            }
+            Err(error) => log_failure(doc, chunk_index, None, error.code),
+        }
+        if !unresolved.is_empty() {
+            outcome.summary.rejected_count += unresolved.len();
+            // 分类来自服务端校验，不把候选或供应商正文转为错误消息。
+            outcome
+                .error
+                .get_or_insert(rejection_code.expect("存在未通过核验的候选"));
+            outcome.retryable = false;
+        }
     }
-    let image_notes = {
-        let _guard = state.communications.lock().await;
-        super::images::notes(state, doc).await?
-    };
-    let summary = Summary {
-        image_notes,
-        raw_hash: doc.raw_hash.clone(),
-        message_count: raw.len(),
-        unsupported_count: unsupported,
-        items,
-    };
-    let _guard = state.communications.lock().await;
-    let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_documents d JOIN communication_sources s ON s.id=d.source_id WHERE d.id=$1 AND d.version=$2 AND s.enabled)").bind(doc.id).bind(doc.version).fetch_one(&state.pool).await?;
-    if !active {
-        return Ok(());
+    Ok(outcome)
+}
+
+impl Outcome {
+    /// 一个分块失败不抹掉其他分块的合格证据，但必须明确记录覆盖缺口。
+    fn fail_chunk(&mut self, doc: &Document, chunk: usize, code: &'static str, retryable: bool) {
+        log_failure(doc, chunk, None, code);
+        self.summary.failed_chunk_count += 1;
+        self.error.get_or_insert(code);
+        self.retryable &= retryable;
     }
-    let mut current = doc.clone();
-    current.summary_hash = Some(store::write_summary(state, doc, &summary)?);
-    sqlx::query("UPDATE communication_documents SET summary_hash=$2,summary_error=NULL WHERE id=$1 AND version=$3").bind(doc.id).bind(&current.summary_hash).bind(doc.version).execute(&state.pool).await?;
-    store::collect(state, &current)?;
+}
+/// 输入和字节预算使用同一结构，正文始终来自保存的原文。
+fn model_message(m: &Message) -> Value {
+    json!({"message_id":m.message_id,"sender_id":m.sender_id,"sender_name":m.display_name(),
+        "sender_type":m.sender_type,"is_me":m.is_me,"create_time":m.create_time,"text":m.text})
+}
+/// 逐项解析防止单个字段错误吞掉同块中所有合格条目。
+fn checked(value: Value, messages: &[Message]) -> ApiResult<Item> {
+    let mut item: Item = serde_json::from_value(value).map_err(|_| {
+        ApiError(
+            StatusCode::BAD_GATEWAY,
+            "communication_summary_invalid_format",
+        )
+    })?;
+    hydrate(&mut item, messages)?;
+    Ok(item)
+}
+/// 身份字段完全由原文覆盖，纠错和首次生成遵守同一证据边界。
+fn hydrate(item: &mut Item, messages: &[Message]) -> ApiResult<()> {
+    let source = evidence(item, messages)?;
+    item.sender_id = source.sender_id.clone();
+    item.is_me = source.is_me;
+    item.create_time = source.create_time;
     Ok(())
 }
+/// 仅输出定位元数据，不记录候选正文、原文、密钥或供应商响应。
+fn log_failure(doc: &Document, chunk: usize, candidate: Option<usize>, code: &'static str) {
+    tracing::warn!(document_id=%doc.id, version=doc.version, attempt=doc.summary_attempts,
+        chunk, candidate, code, "沟通整理候选未通过核验");
+}
+
+#[cfg(test)]
+#[path = "summary_tests.rs"]
+mod tests;

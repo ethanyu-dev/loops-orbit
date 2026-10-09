@@ -137,6 +137,12 @@ pub(crate) fn write_summary(
         serde_json::to_string(summary).map_err(unavailable)?,
         document.day
     );
+    if summary.rejected_count > 0 || summary.failed_chunk_count > 0 {
+        text.push_str(&format!(
+            "部分整理完成：{} 个候选未通过核验，{} 组消息尚未完成整理。以下仅展示已核验条目。\n\n",
+            summary.rejected_count, summary.failed_chunk_count
+        ));
+    }
     for item in &summary.items {
         text.push_str(&format!(
             "- **{}** {}\n  - 出处：{} · {} · {}\n  - 原话：{}\n",

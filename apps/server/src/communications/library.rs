@@ -113,6 +113,10 @@ pub(super) struct LibraryFile {
     summary_hash: Option<String>,
     /// 整理故障分类，不包含原始上游响应。
     summary_error: Option<String>,
+    /// 部分完成独立展示，不能仅根据摘要文件存在判断完成。
+    summary_status: String,
+    /// 当前版本已领取次数。
+    summary_attempts: i32,
     /// 当前版本已核对的失败图片数量；无有效快照时为零。
     images_failed: i64,
     /// 文件读取或其他处理失败，可能尚无摘要错误分类。

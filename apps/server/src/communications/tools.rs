@@ -236,7 +236,7 @@ async fn list(state: &AppState, owner: &str, input: Search) -> ApiResult<Value> 
 
 /// 元数据只提供可追踪版本和可读链接，不包含来源凭证或文件路径。
 fn metadata(state: &AppState, row: &Record) -> Value {
-    json!({"document_id":row.document.id,"source_id":row.document.source_id,"version":row.document.version,"day":row.document.day,"source":short(&row.label),"source_url":format!("{}/communications?communication={}",state.config.public_url,row.document.id),"summary_available":row.document.summary_hash.is_some()})
+    json!({"document_id":row.document.id,"source_id":row.document.source_id,"version":row.document.version,"day":row.document.day,"source":short(&row.label),"source_url":format!("{}/communications?communication={}",state.config.public_url,row.document.id),"summary_available":row.document.summary_hash.is_some(),"summary_status":row.document.summary_status})
 }
 
 /// 展示名也受长度限制，避免不可信名称突破正文预算。
@@ -356,6 +356,6 @@ async fn read(state: &AppState, owner: &str, input: Read) -> ApiResult<Value> {
     result["document"] = metadata(state, &row);
     result["mode"] = json!(actual_mode);
     result["summary_fallback"] = json!(mode == "summary" && summary.is_none());
-    result["coverage"] = json!({"message_count":raw.iter().filter(|m|!m.deleted).count(),"unsupported_count":summary.as_ref().map(|s|s.unsupported_count),"non_text_count":raw.iter().filter(|m|!m.deleted && m.text.trim().is_empty()).count(),"images_unavailable":notes.iter().filter(|n|n.description.is_none()).count()});
+    result["coverage"] = json!({"summary_status":doc.summary_status,"rejected_count":summary.as_ref().map(|s|s.rejected_count),"failed_chunk_count":summary.as_ref().map(|s|s.failed_chunk_count),"message_count":raw.iter().filter(|m|!m.deleted).count(),"unsupported_count":summary.as_ref().map(|s|s.unsupported_count),"non_text_count":raw.iter().filter(|m|!m.deleted && m.text.trim().is_empty()).count(),"images_unavailable":notes.iter().filter(|n|n.description.is_none()).count()});
     Ok(result)
 }

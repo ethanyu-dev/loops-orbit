@@ -61,6 +61,10 @@ export function groupFiles(files: LibraryFile[]) {
 /** 核对中优先于旧摘要；文件存在不意味着整理成功。 */
 export function fileStatus(file: Document) {
   if (file.extraction_version === 0) return { label: '核对中', kind: 'pending' };
+  if (file.summary_status === 'partial') return { label: '部分整理完成', kind: 'error' };
+  if (file.summary_status === 'running') return { label: '整理中', kind: 'pending' };
+  if (file.summary_status === 'retry_wait') return { label: '等待重试', kind: 'pending' };
+  if (file.summary_status === 'pending') return { label: '待整理', kind: 'pending' };
   if (file.summary_error) return { label: '整理失败', kind: 'error' };
   if (file.processing_failed) return { label: '资料处理失败', kind: 'error' };
   if (file.images_failed) return { label: `图片失败 · ${file.images_failed}`, kind: 'error' };

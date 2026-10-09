@@ -7,6 +7,7 @@ mod removal_job_tests;
 mod removal_tests;
 mod retained_tests;
 mod subscription_tests;
+mod summary_tests;
 mod tool_tests;
 use super::*;
 use axum::{
@@ -639,7 +640,7 @@ async fn pausing_source_fences_inflight_sync() {
     h.close().await;
 }
 
-// 验证无原文支持的模型候选不落库，原文仍能检索；不声称能验证自然语言语义蕴含。
+// 验证无原文支持的候选被拒绝、合格候选保留为部分结果，原文仍可检索；不验证真实模型语义。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn fabricated_summary_evidence_is_rejected() {
@@ -652,27 +653,22 @@ async fn fabricated_summary_evidence_is_rejected() {
         due(&h).await;
         communications::sync::step(&h.state).await.unwrap();
     }
-    let (stop, receiver) = tokio::sync::watch::channel(false);
-    let worker = tokio::spawn(communications::sync::run(h.state.clone(), receiver));
-    tokio::time::timeout(Duration::from_secs(5),async {loop {
-        let failed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_documents WHERE summary_error IS NOT NULL AND summary_hash IS NULL)").fetch_one(&h.state.pool).await.unwrap();
-        if failed {break;}tokio::time::sleep(Duration::from_millis(20)).await;
-    }}).await.unwrap();
-    stop.send(true).unwrap();
-    worker.await.unwrap();
-    assert!(
-        !communications::retrieve(&h.state, "admin", "材料")
+    communications::summary_jobs::step(&h.state).await.unwrap();
+    let (state, hash): (String, Option<String>) =
+        sqlx::query_as("SELECT summary_status,summary_hash FROM communication_documents LIMIT 1")
+            .fetch_one(&h.state.pool)
             .await
-            .unwrap()
-            .is_empty()
-    );
-    let count: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM memory_vectors WHERE owner='communications:admin'",
-    )
-    .fetch_one(&h.state.pool)
-    .await
-    .unwrap();
-    assert_eq!(count, 0);
+            .unwrap();
+    assert_eq!(state, "partial");
+    assert!(hash.is_some());
+    let hits = communications::retrieve(&h.state, "admin", "材料")
+        .await
+        .unwrap();
+    assert!(!hits.is_empty());
+    let summary = hits[0].summary.as_ref().unwrap();
+    assert_eq!(summary.items.len(), 1);
+    assert_eq!(summary.items[0].message_id, "om_other");
+    assert_eq!(summary.rejected_count, 1);
     server.abort();
     h.close().await;
 }

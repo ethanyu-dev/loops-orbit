@@ -62,7 +62,7 @@ async fn work_loop(state: &AppState, mut stop: watch::Receiver<bool>, kind: u8) 
             let work = async {
                 match kind {
                     0 => step(state).await,
-                    1 => super::summary::step(state).await,
+                    1 => super::summary_jobs::step(state).await,
                     2 => super::search::index_step(state).await.map(|_| false),
                     3 => reprocess_step(state).await.map(|_| false),
                     4 => super::subscription::history_step(state)
@@ -240,6 +240,8 @@ pub(super) async fn commit_day(
         extraction_version: 1,
         summary_hash: None,
         summary_error: None,
+        summary_status: "pending".into(),
+        summary_attempts: 0,
     });
     let raw = if previous.is_some() {
         store::raw_unchecked(state, &document)?

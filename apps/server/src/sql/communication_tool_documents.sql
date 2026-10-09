@@ -1,5 +1,5 @@
 SELECT d.id, d.source_id, d.day, d.raw_hash, d.version, d.extraction_version,
-       d.summary_hash, d.summary_error, s.label, s.enabled, s.subscribed
+       d.summary_hash, d.summary_error, d.summary_status, d.summary_attempts, s.label, s.enabled, s.subscribed
 FROM communication_documents d
 JOIN communication_sources s ON s.id=d.source_id
 WHERE s.owner IN (

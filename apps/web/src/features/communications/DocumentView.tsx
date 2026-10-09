@@ -4,6 +4,7 @@ import { API_ORIGIN } from '../../config';
 import { api, errorText } from '../../api';
 import { useSearchParams } from 'react-router-dom';
 import { processingError } from './processingError';
+import { canRetrySummary, summaryNotice } from './summaryStatus';
 import type { Detail, Item } from './types';
 
 // 分类展示不暗示机器摘要已被用户确认。
@@ -57,6 +58,24 @@ export function DocumentView({
       });
     return () => controller.abort();
   }, [id, offset, revision, imageErrors]);
+  /** 重新整理是显式写操作；刷新只更新详情读取版本。 */
+  async function retrySummary() {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await api(`/communications/documents/${id}/summary/retry`, {
+        method: 'POST',
+        body: JSON.stringify({ version: detail.document.version }),
+      });
+      setNotice('已排队重新整理。');
+      setRevision((value) => value + 1);
+    } catch (error) {
+      report(error);
+      setRevision((value) => value + 1);
+    } finally {
+      setBusy(false);
+    }
+  }
   /** 归纳文本可修正；选择另一个条目后更换幂等键。 */
   function select(value: Item, index: number) {
     setItem(index);
@@ -131,14 +150,22 @@ export function DocumentView({
                   <h2 id="document-summary-title">整理结果</h2>
                   <span>AI 归纳 · 请核对原话</span>
                 </div>
-                {!detail.summary && (
-                  <p className="document-empty">
-                    {detail.document.summary_error
-                      ? `整理失败：${processingError(detail.document.summary_error)}（${detail.document.summary_error}）`
-                      : '正在整理消息，原始内容可在下方查看。'}
+                {summaryNotice(detail) && (
+                  <p className="document-empty" role="status">
+                    {summaryNotice(detail)}
                   </p>
                 )}
-                {detail.summary?.items.length === 0 && (
+                {canRetrySummary(detail) && (
+                  <div className="document-empty">
+                    <button disabled={busy} onClick={() => void retrySummary()}>
+                      {busy ? '正在提交…' : '重新整理'}
+                    </button>
+                    {detail.document.summary_status === 'partial' && (
+                      <p>重新整理会替换当前结果，并停止依赖当前结果的提醒与跟进。</p>
+                    )}
+                  </div>
+                )}
+                {detail.summary?.items.length === 0 && !detail.document.summary_error && (
                   <p className="document-empty">暂未发现明确的决定、承诺或待确认事项。</p>
                 )}
                 {detail.summary?.items.map((value, index) => (
