@@ -15,7 +15,7 @@ const CANDIDATES: usize = 20;
 static SEGMENTER: std::sync::LazyLock<Jieba> = std::sync::LazyLock::new(Jieba::new);
 
 /// 中文先分词，英文统一小写；文档和查询使用同一分析流程。
-fn tokens(text: &str) -> Vec<String> {
+pub(crate) fn tokens(text: &str) -> Vec<String> {
     SEGMENTER
         .cut_for_search(text, true)
         .into_iter()

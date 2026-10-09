@@ -117,7 +117,25 @@ impl Runtime {
         progress: Option<&tokio::sync::watch::Sender<String>>,
         host: Option<&dyn tools::Host>,
     ) -> Result<String, Failure> {
-        let mut messages = vec![json!({ "role": "system", "content": SYSTEM_PROMPT })];
+        self.run_for_audience(history, progress, host, false).await
+    }
+
+    /// 服务端根据认证身份选择回复对象，外部提问者不继承本人的助理角色。
+    pub async fn run_for_audience(
+        &self,
+        history: &[Message],
+        progress: Option<&tokio::sync::watch::Sender<String>>,
+        host: Option<&dyn tools::Host>,
+        external: bool,
+    ) -> Result<String, Failure> {
+        let prompt = if external {
+            include_str!("../prompts/external_chat.md")
+        } else {
+            SYSTEM_PROMPT
+        };
+        // 第三方仅使用已发布 RAG；即使全局启用工具，也不提供基础工具或发现入口。
+        let tools_enabled = self.config.tools_enabled && !external;
+        let mut messages = vec![json!({ "role": "system", "content": prompt })];
         let mut session = tools::Session::default();
         messages.extend(
             history
@@ -133,16 +151,16 @@ impl Runtime {
             let instructions = host
                 .map(|host| host.instructions_for(&advertised))
                 .unwrap_or_default();
-            messages[0]["content"] = if self.config.tools_enabled {
+            messages[0]["content"] = if tools_enabled {
                 json!(format!(
-                    "{SYSTEM_PROMPT}\n\n{}\n\n{instructions}",
+                    "{prompt}\n\n{}\n\n{instructions}",
                     include_str!("../prompts/tool_discovery.md")
                 ))
             } else {
-                json!(SYSTEM_PROMPT)
+                json!(prompt)
             };
-            let tools_available = self.config.tools_enabled && step + 1 < MAX_STEPS;
-            if self.config.tools_enabled && !tools_available {
+            let tools_available = tools_enabled && step + 1 < MAX_STEPS;
+            if tools_enabled && !tools_available {
                 messages.push(
                     json!({"role":"system","content":include_str!("../prompts/tool_budget.md")}),
                 );
@@ -295,6 +313,25 @@ impl Runtime {
             .filter(|s| !s.trim().is_empty())
             .ok_or(failure("invalid_image_description", true))?;
         Ok(text.chars().take(1500).collect())
+    }
+
+    /// 独立提取通用知识候选，不提供工具和自动发布能力；服务端另行验证逐字证据。
+    pub async fn extract_knowledge(&self, input: &Value) -> Result<Value, Failure> {
+        let messages = vec![
+            json!({"role":"system","content":include_str!("../prompts/knowledge_extract.md")}),
+            json!({"role":"user","content":input.to_string()}),
+        ];
+        let answer = self
+            .complete_extra(
+                &messages,
+                None,
+                false,
+                Vec::new(),
+                COMMUNICATION_OUTPUT_TOKENS,
+            )
+            .await?;
+        serde_json::from_str(answer["content"].as_str().unwrap_or(""))
+            .map_err(|_| failure("invalid_knowledge_candidates", false))
     }
 
     /// 沟通整理不提供工具；服务端另外验证发送者和逐字证据。

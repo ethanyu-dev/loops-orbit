@@ -290,7 +290,8 @@ async fn image_resource_vision_and_forget() {
         .fetch_one(&h.state.pool)
         .await
         .unwrap();
-    assert_eq!(count, 0);
+    let remaining:Value=sqlx::query_scalar("SELECT COALESCE(jsonb_agg(jsonb_build_object('source',i.source_id,'chat',s.chat_id,'message',i.message_id)), '[]') FROM communication_images i LEFT JOIN communication_sources s ON s.id=i.source_id").fetch_one(&h.state.pool).await.unwrap();
+    assert_eq!(count, 0, "deleted source={source}, remaining={remaining}");
     server.abort();
     h.close().await;
 }

@@ -79,6 +79,15 @@ impl Harness {
                 let captured = captured.clone();
                 async move {
                     captured.lock().unwrap().push(body.clone());
+                    // 知识夹具只验证结构、证据核对和发布边界，不证明真实模型的提取或隐私判断质量。
+                    if body["messages"][0]["content"].as_str().unwrap().contains("通用知识候选提取器") {
+                        assert!(body.get("tools").is_none());
+                        let input:Value=serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+                        let result:Vec<Value>=input["messages"].as_array().unwrap().iter()
+                            .filter(|m|m["text"].as_str().unwrap().contains("可复用流程"))
+                            .take(6).map(|m|json!({"title":"测试环境注册流程","content":"测试环境请先注册 Vercel，再阅读 https://example.feishu.cn/wiki/shared 。","evidence":[{"message_id":m["message_id"],"quote":if m["text"].as_str().unwrap().contains("伪造知识") {"并不存在的原文"} else {"可复用流程：测试环境请先注册 Vercel"}}]})).collect();
+                        return Json(json!({"choices":[{"message":{"content":json!(result).to_string()}}]})).into_response();
+                    }
                     // 图片夹具只验证多模态请求形状，不代表实际模型的识别质量。
                     if body["messages"][0]["content"].as_str().unwrap().contains("阅读聊天消息附带的图片") {
                         assert!(body["messages"][1]["content"][1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));

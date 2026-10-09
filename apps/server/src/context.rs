@@ -11,6 +11,9 @@ use sqlx::FromRow;
 const HISTORY_SQL: &str = include_str!("sql/context_history.sql");
 const SAVE_SQL: &str = include_str!("sql/context_save.sql");
 const RECENT_TURNS: usize = 12;
+// 本人私聊保留更多原文；这属于字符预算，不冒充模型精确 token 数。
+const OWNER_RECENT_TURNS: usize = 24;
+const OWNER_RECENT_CHARS: usize = 48_000;
 const RECENT_CHARS: usize = 24_000;
 const SUMMARY_BATCH_CHARS: usize = 32_000;
 const HISTORY_BATCH_ROWS: i64 = 65;
@@ -49,6 +52,25 @@ impl Turn {
 
 /// 增量压缩已稳定的历史，不静默丢弃超出窗口的早期约束。
 pub async fn prepare(state: &AppState, job: &Job) -> ApiResult<Vec<Message>> {
+    prepare_for_audience(state, job, true).await
+}
+
+/// 身份由调用方校验；本人扩大近期窗口，第三方使用紧凑窗口。
+pub(crate) async fn prepare_for_audience(
+    state: &AppState,
+    job: &Job,
+    external: bool,
+) -> ApiResult<Vec<Message>> {
+    let recent_turns = if external {
+        RECENT_TURNS
+    } else {
+        OWNER_RECENT_TURNS
+    };
+    let recent_chars = if external {
+        RECENT_CHARS
+    } else {
+        OWNER_RECENT_CHARS
+    };
     let (mut summary, mut through): (String, i64) =
         sqlx::query_as("SELECT context_summary,summary_through FROM conversations WHERE id=$1")
             .bind(job.conversation_id)
@@ -68,8 +90,8 @@ pub async fn prepare(state: &AppState, job: &Job) -> ApiResult<Vec<Message>> {
                 .iter()
                 .filter(|turn| turn.batch_id != job.batch_id)
                 .count()
-                <= RECENT_TURNS
-            && chars + job.input.chars().count() <= RECENT_CHARS
+                <= recent_turns
+            && chars + job.input.chars().count() <= recent_chars
         {
             let mut messages = Vec::new();
             if !summary.is_empty() {
@@ -95,7 +117,7 @@ pub async fn prepare(state: &AppState, job: &Job) -> ApiResult<Vec<Message>> {
             if turn.batch_id == job.batch_id {
                 break;
             }
-            if turns.len() - index <= RECENT_TURNS && remaining <= RECENT_CHARS {
+            if turns.len() - index <= recent_turns && remaining <= recent_chars {
                 break;
             }
             if budget + turn.chars() > SUMMARY_BATCH_CHARS {

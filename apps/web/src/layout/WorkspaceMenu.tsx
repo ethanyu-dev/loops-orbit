@@ -4,6 +4,7 @@ import {
   Activity,
   Bell,
   Brain,
+  BookOpen,
   ChevronUp,
   Link2,
   LogOut,
@@ -19,6 +20,7 @@ import { PAGE_PATHS, type Page } from './navigation';
 const WORKSPACE_ITEMS = [
   { page: 'chat', label: '对话空间', icon: MessageSquare, admin: false },
   { page: 'memory', label: '个人记忆', icon: Brain, admin: false },
+  { page: 'knowledge', label: '通用知识库', icon: BookOpen, admin: true },
   { page: 'followups', label: '提醒与跟进', icon: Bell, admin: false },
   { page: 'communications', label: '飞书沟通资料', icon: MessageSquare, admin: true },
   { page: 'integrations', label: '外部连接', icon: Link2, admin: true },

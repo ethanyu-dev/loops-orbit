@@ -239,6 +239,26 @@ pub async fn deliver_one(state: &AppState) -> ApiResult<()> {
     let Some(delivery) = row else {
         return Ok(());
     };
+    // 已经生成但尚未投递的知识答案仍需复核；重试也不能绕过知识撤回或正文变更。
+    let uses_knowledge: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM runs WHERE id=$1 AND knowledge_revision IS NOT NULL)",
+    )
+    .bind(delivery.id)
+    .fetch_one(&state.pool)
+    .await?;
+    let _knowledge_guard = if uses_knowledge {
+        let guard = state.communications.lock().await;
+        let current:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs r,knowledge_state k WHERE r.id=$1 AND r.knowledge_revision=k.revision)")
+            .bind(delivery.id).fetch_one(&state.pool).await?;
+        if !current {
+            sqlx::query("UPDATE outbox SET status='cancelled',lease_until=NULL WHERE id=$1 AND lease_token=$2 AND status='running'")
+                .bind(delivery.id).bind(lease).execute(&state.pool).await?;
+            return Ok(());
+        }
+        Some(guard)
+    } else {
+        None
+    };
     let followup = if let Some(id) = delivery.followup_id {
         let Some(job) = crate::followups::scheduler::prepare_delivery(
             state,

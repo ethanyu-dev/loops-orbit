@@ -166,16 +166,10 @@ fn write_questions(h: &Harness, document: Value) {
     )
     .unwrap();
 }
-/// 写入明确流程，让真实检索为起草器提供出处。
+/// 本人通过管理接口明确发布流程，私人记忆不再自动进入代答证据。
 async fn knowledge(h: &Harness, cookie: &str) {
-    memory::create(
-        h,
-        cookie,
-        "project.novita.access",
-        "申请 novita 测试环境权限的流程：提交申请表，填写测试用途，由环境管理员审核。",
-        "project",
-    )
-    .await;
+    let (status,_,body)=h.request("POST","/api/knowledge",Some(cookie),json!({"title":"novita 测试环境申请流程","content":"申请 novita 测试环境权限的流程：提交申请表，填写测试用途，由环境管理员审核。","status":"published"})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 // 验证用户授权、采集入队、Jev 两阶段、知识出处、标识及重放去重；不验收真实模型语义质量或租户投递。
@@ -413,10 +407,23 @@ async fn takeover_rechecks_inflight_settings_and_knowledge() {
                 );
             }
             "forget" => {
-                let entries = orbit_server::memory::list(&h.state, "admin").await.unwrap();
-                orbit_server::memory::forget(&h.state, "admin", entries[0].id)
+                let (_, _, entries) = h
+                    .request("GET", "/api/knowledge", Some(&cookie), Value::Null)
+                    .await;
+                assert_eq!(
+                    h.request(
+                        "DELETE",
+                        &format!(
+                            "/api/knowledge/{}",
+                            entries["items"][0]["id"].as_str().unwrap()
+                        ),
+                        Some(&cookie),
+                        Value::Null
+                    )
                     .await
-                    .unwrap();
+                    .0,
+                    StatusCode::OK
+                );
             }
             "edited" => {
                 f.lock().unwrap().message["body"]["content"] =
@@ -575,24 +582,32 @@ async fn takeover_invalid_file_pauses_without_interrupting_collection_and_recove
     h.close().await;
 }
 
-// 验证真实沟通原文检索和新增摘要字段下的版本复核；协议及模型仍为夹具，不代表真实租户投递验收。
+// 验证私人记忆和沟通原文即使包含相关流程也不能直接用于接管；不证明真实模型语义或生产租户投递。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
-async fn takeover_answers_from_communication_evidence_with_current_document_schema() {
+async fn takeover_excludes_unpublished_communication_and_personal_memory() {
     let (h, f, server) = setup_takeover().await;
     let cookie = h.login().await;
     connect(&h, &cookie).await;
     add(&h, &cookie).await;
     enable(&h, &cookie).await;
     f.lock().unwrap().communication_knowledge = true;
+    memory::create(
+        &h,
+        &cookie,
+        "project.novita.access",
+        "申请 novita 测试环境权限：提交申请表，填写测试用途，由环境管理员审核。",
+        "project",
+    )
+    .await;
     communications::sync::step(&h.state).await.unwrap();
     takeover::step(&h.state).await.unwrap();
     let status: String = sqlx::query_scalar("SELECT status FROM communication_takeover_jobs")
         .fetch_one(&h.state.pool)
         .await
         .unwrap();
-    assert_eq!(status, "sent");
-    assert_eq!(f.lock().unwrap().sent.len(), 1);
+    assert_eq!(status, "ignored");
+    assert!(f.lock().unwrap().sent.is_empty());
     server.abort();
     h.close().await;
 }

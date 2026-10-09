@@ -129,7 +129,7 @@ pub struct Document {
     /// 当前文档版本已领取的执行次数，用于有界重试和在途写回围栏。
     pub summary_attempts: i32,
 }
-pub(super) const DOCUMENT_COLUMNS: &str = "id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version,summary_status,summary_attempts";
+pub(crate) const DOCUMENT_COLUMNS: &str = "id,source_id,day,raw_hash,version,summary_hash,summary_error,extraction_version,summary_status,summary_attempts";
 
 /// 提醒引用的是用户确认的摘要条目，不把整段外部对话当作用户指令。
 #[derive(Clone, Serialize, Deserialize)]

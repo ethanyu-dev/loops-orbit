@@ -18,6 +18,9 @@ const Integrations = lazy(() =>
 );
 const Links = lazy(() => import('./features/links/Links').then((m) => ({ default: m.Links })));
 const Memory = lazy(() => import('./features/memory/Memory').then((m) => ({ default: m.Memory })));
+const Knowledge = lazy(() =>
+  import('./features/knowledge/Knowledge').then((m) => ({ default: m.Knowledge })),
+);
 const Followups = lazy(() =>
   import('./features/followups/Followups').then((m) => ({ default: m.Followups })),
 );
@@ -223,6 +226,12 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
                 }
               />
               <Route path="/memory" element={<Memory report={report} />} />
+              <Route
+                path="/knowledge"
+                element={
+                  session.identity.admin ? <Knowledge report={report} /> : <Unavailable forbidden />
+                }
+              />
               <Route
                 path="/communications/*"
                 element={

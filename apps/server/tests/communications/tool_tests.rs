@@ -3,7 +3,7 @@ use agent_runtime::tools::Host as _;
 use orbit_server::tools::Host;
 
 /// 只写隔离数据库与临时目录中的规范 JSONL，构造跨日期资料；不访问真实聊天。
-async fn document(h: &Harness, source: Uuid, day: &str, text: &str) -> Uuid {
+pub(super) async fn document(h: &Harness, source: Uuid, day: &str, text: &str) -> Uuid {
     let id = Uuid::new_v4();
     let time = chrono::DateTime::parse_from_rfc3339(&format!("{day}T10:00:00+08:00"))
         .unwrap()

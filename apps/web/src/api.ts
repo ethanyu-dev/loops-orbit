@@ -2,6 +2,14 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
+  invalid_knowledge: '请填写有效的知识主题和正文，主题最多 120 字，正文最多 2,000 字。',
+  knowledge_extraction_not_found: '这次知识提取任务已不存在，请重新打开文件后操作。',
+  knowledge_not_found: '这条知识已不存在，请刷新。',
+  knowledge_changed: '知识已被修改，请重新载入并核对后再保存。',
+  knowledge_limit: '知识条目已达 2,000 条，请先整理不再需要的候选或旧知识。',
+  rag_unavailable: '知识检索暂时不可用，请稍后重试。',
+  knowledge_snapshot_not_found: '原始快照已不存在，请刷新。',
+  knowledge_unavailable: '通用知识暂时不可用，请稍后重试。',
   invalid_takeover_settings: '接管阈值应为 0.5 至 1。',
   takeover_rules_unreadable: '无法读取问题文件，请检查文件路径和读取权限。',
   takeover_rules_invalid:
