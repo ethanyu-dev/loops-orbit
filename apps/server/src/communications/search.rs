@@ -288,16 +288,13 @@ pub(crate) async fn context(
                 .map(|t| t.with_timezone(&super::LOCAL_TIMEZONE).to_rfc3339())
                 .unwrap_or_default()
         };
-        let link = format!(
-            "{}/communications?communication={}",
-            state.config.public_url, hit.document.id
-        );
         let notes = super::images::notes(state, &hit.document).await?;
-        let value = json!({"document_id":hit.document.id,"version":hit.document.version,"source":hit.label,"day":hit.document.day,"source_url":link,"summary_status":hit.document.summary_status,
+        // 只提供核对依据与后续读取标识，不生成会话跳转地址，避免模型将其附到回复。
+        let value = json!({"document_id":hit.document.id,"version":hit.document.version,"source":hit.label,"day":hit.document.day,"summary_status":hit.document.summary_status,
             "summary_coverage":hit.summary.as_ref().map(|s|json!({"rejected_count":s.rejected_count,"failed_chunk_count":s.failed_chunk_count})),
             "messages":hit.messages.iter().map(|m|json!({"sender":m.display_name(),"is_me":m.is_me,"time":time(m.create_time),"text":m.text.chars().take(1800).collect::<String>()})).collect::<Vec<_>>(),
             "summary":hit.summary.as_ref().map(|s|s.items.iter().enumerate().take(8).map(|(index,i)|json!({"item":index,"kind":i.kind,"text":i.text,"quote":i.quote,"sender":sender(&i.message_id),"is_me":i.is_me,"time":time(i.create_time)})).collect::<Vec<_>>()),
-            "image_interpretations":notes.iter().filter_map(|n|n.description.as_ref().map(|text|json!({"sender":sender(&n.message_id),"interpretation":text,"source_url":link}))).take(8).collect::<Vec<_>>()});
+            "image_interpretations":notes.iter().filter_map(|n|n.description.as_ref().map(|text|json!({"sender":sender(&n.message_id),"interpretation":text}))).take(8).collect::<Vec<_>>()});
         let size = value.to_string().len();
         if bytes + size > 16000 {
             break;

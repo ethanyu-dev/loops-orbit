@@ -45,7 +45,7 @@ async fn job(h: &Harness, cookie: &str) -> worker::Job {
     sqlx::query_as("SELECT id,conversation_id,seq,batch_id,input,attempts,lease_token,reply_to FROM runs WHERE id=$1").bind(id).fetch_one(&h.state.pool).await.unwrap()
 }
 
-// 验证日期枚举超过旧六份上限、关键词/来源过滤、分页快照及非法参数；不评价真实模型检索选择。
+// 验证日期枚举、过滤、分页和参数，且元数据不生成会话地址；不评价真实模型检索选择或最终回复。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn tools_search_dates_pagination_and_keywords() {
@@ -94,6 +94,8 @@ async fn tools_search_dates_pagination_and_keywords() {
         assert_eq!(result["has_more"], offset < 12, "{result}");
         for item in result["items"].as_array().unwrap() {
             assert_eq!(item["day"], "2026-10-08");
+            assert!(item.get("source_url").is_none());
+            assert!(!item.to_string().contains("/communications?communication="));
             assert!(ids.insert(item["document_id"].as_str().unwrap().to_owned()));
         }
     }
@@ -149,7 +151,7 @@ async fn tools_search_dates_pagination_and_keywords() {
     h.close().await;
 }
 
-// 验证原文回退、超长 Unicode 文本全文分页、版本变化和文件损坏；不将夹具原文视为生产验收。
+// 验证原文回退、含业务链接的长文本分页、无会话地址元数据及失效读取；不验证真实模型或飞书投递。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn tools_read_preserves_long_text_and_rejects_stale_files() {
@@ -157,7 +159,10 @@ async fn tools_read_preserves_long_text_and_rejects_stale_files() {
     let cookie = h.login().await;
     connect(&h, &cookie).await;
     let source = add(&h, &cookie).await;
-    let text = "中文😀".repeat(6200);
+    let text = format!(
+        "文档 https://example.feishu.cn/wiki/test-doc 网页 https://vercel.com/signup {}",
+        "中文😀".repeat(6200)
+    );
     let id = document(&h, source, "2026-10-08", &text).await;
     let job = job(&h, &cookie).await;
     let host = Host::new(&h.state, &job).await.unwrap();
@@ -168,6 +173,7 @@ async fn tools_read_preserves_long_text_and_rejects_stale_files() {
         assert_eq!(result["mode"], "messages", "{result}");
         assert_eq!(result["summary_fallback"], true);
         assert_eq!(result["coverage"]["message_count"], 1);
+        assert!(result["document"].get("source_url").is_none());
         assert_eq!(result["items"][0]["is_me"], true);
         assert!(result.to_string().len() < 26000);
         let items = result["items"].as_array().unwrap();
@@ -329,7 +335,7 @@ async fn tools_enforce_identity_source_and_run_boundaries() {
     h.close().await;
 }
 
-// 使用真实摘要落盘和本地模型夹具验证证据读取与快照更新；不声称摘要语义或图片识别已在生产验收。
+// 使用摘要落盘和本地模型夹具验证无会话地址的证据读取与快照更新；不验证真实模型遵守回复约束。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn tools_read_validated_summary_and_detect_summary_changes() {
@@ -351,12 +357,8 @@ async fn tools_read_validated_summary_and_detect_summary_changes() {
             .unwrap()
             .contains("材料")
     );
-    assert!(
-        first["document"]["source_url"]
-            .as_str()
-            .unwrap()
-            .contains("/communications?communication=")
-    );
+    assert!(first["document"].get("source_url").is_none());
+    assert!(!first.to_string().contains("/communications?communication="));
     args["offset"] = first["next_offset"].clone();
     args["snapshot"] = first["snapshot"].clone();
     let next = host.execute("communication_read", args.clone()).await;

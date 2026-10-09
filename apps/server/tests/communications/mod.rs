@@ -422,7 +422,7 @@ async fn pagination_recovers_without_duplicate_messages_or_runs() {
     h.close().await;
 }
 
-// 验证 BM25、向量回退、本人机器人上下文及访客隔离；三维夹具不代表语义效果验收。
+// 验证 BM25、向量回退、本人机器人上下文及访客隔离，并检查不生成会话地址；夹具不代表真实模型回复验收。
 #[tokio::test]
 #[ignore = "需要显式 TEST_DATABASE_URL"]
 async fn retrieval_is_scoped_and_used_as_external_evidence() {
@@ -487,7 +487,8 @@ async fn retrieval_is_scoped_and_used_as_external_evidence() {
                         .as_str()
                         .is_some_and(|s| s.contains("沟通资料检索结果")
                             && s.contains("小林")
-                            && s.contains("source_url")
+                            && !s.contains("source_url")
+                            && !s.contains("/communications?communication=")
                             && !s.contains("om_other")
                             && !s.contains("ou_other")))))
         );
