@@ -26,7 +26,7 @@ pub struct Config {
     pub followup_timezone: String,
     /// 用户授权的沟通资料采集，与机器人消息入口独立启用。
     pub communications: Option<crate::communications::Config>,
-    /// 独立的 Linear 用户 OAuth 连接。
+    /// 独立的 Linear 个人 API Key 配置。
     pub linear: Option<crate::linear::Config>,
 }
 

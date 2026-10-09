@@ -1,4 +1,4 @@
-use super::{Connection, client, connection, queries, update};
+use super::{Connection, connection, queries, update};
 use crate::{
     AppState,
     error::{ApiError, ApiResult},
@@ -19,7 +19,7 @@ pub(crate) struct Provider<'a> {
     state: &'a AppState,
     /// 当前生成任务及租约。
     job: &'a Job,
-    /// 注册时已验证的连接；执行前仍重查代次和 scopes。
+    /// 注册时已验证的连接；执行前仍重查代次和密钥摘要。
     connection: Connection,
     /// 本批次真实用户原文，用于更新动作证据校验。
     inputs: Vec<String>,
@@ -48,24 +48,10 @@ impl Host for Provider<'_> {
         )
     }
     fn catalog(&self) -> Vec<Descriptor> {
-        serde_json::from_str::<Vec<Descriptor>>(CATALOG)
-            .expect("固定 Linear 目录")
-            .into_iter()
-            .filter(|tool| {
-                tool.effect == "read" || self.connection.scopes.iter().any(|scope| scope == "write")
-            })
-            .collect()
+        serde_json::from_str(CATALOG).expect("固定 Linear 目录")
     }
     fn definitions(&self) -> Vec<Value> {
-        serde_json::from_str::<Vec<Value>>(DEFINITIONS)
-            .expect("固定 Linear schema")
-            .into_iter()
-            .filter(|tool| {
-                self.catalog()
-                    .iter()
-                    .any(|entry| tool["function"]["name"] == entry.name)
-            })
-            .collect()
+        serde_json::from_str(DEFINITIONS).expect("固定 Linear schema")
     }
     fn execute<'a>(
         &'a self,
@@ -75,25 +61,14 @@ impl Host for Provider<'_> {
         Box::pin(async move {
             let result = async {
                 update::active(self.state, self.job).await?;
-                let (connection, tokens) =
-                    client::access(self.state, self.connection.generation).await?;
-                if !connection.scopes.iter().any(|s| s == "read") {
-                    return Err(super::invalid());
-                }
+                let connection = connection::access(self.state, self.connection.generation).await?;
+                let token = &super::configured(self.state)?.api_key;
                 if name == "linear_issue_update" {
-                    update::execute(
-                        self.state,
-                        self.job,
-                        &self.inputs,
-                        &connection,
-                        &tokens.access_token,
-                        args,
-                    )
-                    .await
+                    update::execute(self.state, self.job, &self.inputs, &connection, token, args)
+                        .await
                 } else {
                     let result =
-                        queries::execute(self.state, &connection, &tokens.access_token, name, args)
-                            .await?;
+                        queries::execute(self.state, &connection, token, name, args).await?;
                     // 网络等待期间可能断开、换号或取消，返回资料前再次校验，避免旧任务继续接收数据。
                     update::active(self.state, self.job).await?;
                     let current = super::connection(self.state, "admin").await?;
