@@ -1,6 +1,7 @@
 mod decision;
 mod evidence;
 mod rules;
+mod self_chat;
 mod settings;
 mod worker;
 

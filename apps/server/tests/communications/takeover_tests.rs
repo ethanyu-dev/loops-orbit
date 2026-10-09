@@ -5,6 +5,12 @@ use orbit_server::communications::takeover;
 struct TakeoverFixture {
     /// 被采集的原始消息。
     message: Value,
+    /// 模拟向本人发送提示返回的会话，不依赖会话名称或消息发送者猜测。
+    self_chat_id: String,
+    /// 验证绑定时拒绝应用身份响应。
+    self_chat_bot_sender: bool,
+    /// 捕获绑定提示，与真正的知识回复分开统计。
+    bindings: Vec<Value>,
     /// 使用较早的本人消息提供沟通知识，覆盖文档版本复核。
     communication_knowledge: bool,
     /// 匹配概率与复核概率独立，验证两道关口。
@@ -38,6 +44,9 @@ async fn setup_takeover() -> (
     let at = chrono::Utc::now().timestamp_millis() - 4000;
     let fixture = Arc::new(Mutex::new(TakeoverFixture {
         message: json!({"message_id":"om_question","chat_id":"oc_fixture","sender":{"id":"ou_other","id_type":"open_id","sender_type":"user"},"create_time":at.to_string(),"update_time":at.to_string(),"msg_type":"text","body":{"content":json!({"text":"怎么申请 novita 测试环境权限？"}).to_string()}}),
+        self_chat_id: "oc_fixture".into(),
+        self_chat_bot_sender: false,
+        bindings: vec![],
         communication_knowledge: false,
         match_probability: 0.98,
         review_probability: 0.98,
@@ -76,6 +85,14 @@ async fn setup_takeover() -> (
                 let mut own=f.message.clone();own["message_id"]=json!("om_owner_reply");own["sender"]["id"]=json!("ou_allowed");own["create_time"]=json!(chrono::Utc::now().timestamp_millis().to_string());items.push(own);
             }
             Json(json!({"code":0,"data":{"items":items,"has_more":false}}))
+        }))
+        .route("/im/v1/messages", post(|State(f):State<Arc<Mutex<TakeoverFixture>>>,headers:HeaderMap,Query(query):Query<HashMap<String,String>>,Json(body):Json<Value>|async move {
+            assert_eq!(headers["authorization"],"Bearer fixture-personal-token");
+            assert_eq!(query["receive_id_type"],"open_id");
+            assert_eq!(body["receive_id"],"ou_allowed");
+            let mut f = f.lock().unwrap();
+            f.bindings.push(body);
+            Json(json!({"code":0,"data":{"message_id":"om_binding","chat_id":f.self_chat_id,"sender":{"id":"ou_allowed","id_type":"open_id","sender_type":if f.self_chat_bot_sender {"app"} else {"user"}}}}))
         }))
         .route("/im/v1/messages/om_question/reply",post(|State(f):State<Arc<Mutex<TakeoverFixture>>>,headers:HeaderMap,Json(body):Json<Value>|async move {
             assert_eq!(headers["authorization"],"Bearer fixture-personal-token");
@@ -368,6 +385,7 @@ async fn takeover_requires_authorization_and_excludes_non_new_private_messages()
 async fn takeover_rechecks_inflight_settings_and_knowledge() {
     for scenario in [
         "disable",
+        "self_test_off",
         "forget",
         "edited",
         "revoked",
@@ -380,7 +398,12 @@ async fn takeover_rechecks_inflight_settings_and_knowledge() {
         connect(&h, &cookie).await;
         add(&h, &cookie).await;
         knowledge(&h, &cookie).await;
-        enable(&h, &cookie).await;
+        if scenario == "self_test_off" {
+            f.lock().unwrap().message["sender"]["id"] = json!("ou_allowed");
+            enable_self_test(&h, &cookie).await;
+        } else {
+            enable(&h, &cookie).await;
+        }
         let gate = Arc::new(MessageGate {
             arrived: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
@@ -393,6 +416,11 @@ async fn takeover_rechecks_inflight_settings_and_knowledge() {
             .await
             .unwrap();
         match scenario {
+            "self_test_off" => {
+                let settings = snapshot(&h, &cookie).await;
+                let (status, _, _) = h.request("PUT", "/api/communications/takeover", Some(&cookie), json!({"enabled":true,"self_test_enabled":false,"threshold":0.9,"version":settings["version"],"rules_revision":settings["rules_revision"]})).await;
+                assert_eq!(status, StatusCode::OK);
+            }
             "disable" => {
                 assert_eq!(
                     h.request(
@@ -608,6 +636,209 @@ async fn takeover_excludes_unpublished_communication_and_personal_memory() {
         .unwrap();
     assert_eq!(status, "ignored");
     assert!(f.lock().unwrap().sent.is_empty());
+    server.abort();
+    h.close().await;
+}
+
+/// 保存测试开关走真实 API；仅回拨隔离库时间，让夹具的新问题无需依赖睡眠。
+async fn enable_self_test(h: &Harness, cookie: &str) {
+    let settings = snapshot(h, cookie).await;
+    let (status, _, value) = h.request("PUT", "/api/communications/takeover", Some(cookie), json!({"enabled":true,"self_test_enabled":true,"threshold":0.9,"version":settings["version"],"rules_revision":settings["rules_revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    sqlx::query("UPDATE communication_takeover_settings SET since_ms=$1")
+        .bind(chrono::Utc::now().timestamp_millis() - 10_000)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+}
+
+// 验证自聊绑定、自动订阅、外部证据链、真实身份保留与回复防循环；不覆盖飞书真实自聊 API 能力。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn takeover_self_chat_uses_external_flow_without_reply_loop() {
+    let (h, f, server) = setup_takeover().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    assert!(snapshot(&h, &cookie).await["self_test_chat_id"].is_null());
+    knowledge(&h, &cookie).await;
+    f.lock().unwrap().message["sender"]["id"] = json!("ou_allowed");
+    enable_self_test(&h, &cookie).await;
+    assert_eq!(
+        snapshot(&h, &cookie).await["self_test_chat_id"],
+        "oc_fixture"
+    );
+    // 新来源只从开启时采集；夹具问题较早，显式回拨窗口以验证后续链路。
+    sqlx::query("UPDATE communication_sources SET start_at=start_at-10,watermark=watermark-10")
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    communications::sync::step(&h.state).await.unwrap();
+    takeover::step(&h.state).await.unwrap();
+    let job: Value =
+        sqlx::query_scalar("SELECT message FROM communication_takeover_jobs WHERE status='sent'")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(job["is_me"], true);
+    {
+        let mut f = f.lock().unwrap();
+        assert_eq!(f.bindings.len(), 1);
+        let notice: Value =
+            serde_json::from_str(f.bindings[0]["content"].as_str().unwrap()).unwrap();
+        assert!(notice["text"].as_str().unwrap().starts_with("[agent]"));
+        assert_eq!(f.sent.len(), 1);
+        assert_eq!(f.decisions.len(), 2);
+        f.message["message_id"] = json!("om_agent_reply");
+        f.message["body"]["content"] = f.sent[0]["content"].clone();
+    }
+    due(&h).await;
+    communications::sync::step(&h.state).await.unwrap();
+    takeover::step(&h.state).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_takeover_jobs")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(f.lock().unwrap().sent.len(), 1);
+    server.abort();
+    h.close().await;
+}
+
+// 验证自聊开关不会放行发给其他人的本人消息，也不允许私人原文代替已发布知识；不测试真实模型判断质量。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn takeover_self_chat_preserves_recipient_and_evidence_boundaries() {
+    for scenario in [
+        "other_chat",
+        "private_only",
+        "newer_input",
+        "old_message",
+        "agent_notice",
+    ] {
+        let (h, f, server) = setup_takeover().await;
+        let cookie = h.login().await;
+        connect(&h, &cookie).await;
+        add(&h, &cookie).await;
+        {
+            let mut f = f.lock().unwrap();
+            f.message["sender"]["id"] = json!("ou_allowed");
+            if scenario == "other_chat" {
+                f.self_chat_id = "oc_self".into();
+            }
+            if scenario == "private_only" {
+                f.communication_knowledge = true;
+            }
+            if scenario == "newer_input" {
+                f.owner_replied = true;
+            }
+            if scenario == "agent_notice" {
+                f.message["body"]["content"] =
+                    json!(json!({"text":"[agent] 正在绑定自聊测试"}).to_string());
+            }
+        }
+        if scenario != "private_only" {
+            knowledge(&h, &cookie).await;
+        }
+        enable_self_test(&h, &cookie).await;
+        if scenario == "old_message" {
+            sqlx::query("UPDATE communication_takeover_settings SET since_ms=$1")
+                .bind(chrono::Utc::now().timestamp_millis())
+                .execute(&h.state.pool)
+                .await
+                .unwrap();
+        }
+        // 只同步已有联系人，避免夹具固定响应被另一个来源当成自己的消息。
+        sqlx::query("UPDATE communication_sources SET next_sync=now()+interval '1 day' WHERE chat_id='oc_self'").execute(&h.state.pool).await.unwrap();
+        communications::sync::step(&h.state).await.unwrap();
+        // 私人证据夹具也包含一条本人消息，最多推进两项候选后检查目标问题。
+        for _ in 0..2 {
+            takeover::step(&h.state).await.unwrap();
+        }
+        assert!(f.lock().unwrap().sent.is_empty(), "{scenario}");
+        if ["other_chat", "old_message", "agent_notice"].contains(&scenario) {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_takeover_jobs")
+                    .fetch_one(&h.state.pool)
+                    .await
+                    .unwrap(),
+                0,
+                "{scenario}"
+            );
+        } else {
+            let reason: String = sqlx::query_scalar(
+                "SELECT reason FROM communication_takeover_jobs WHERE message_id='om_question'",
+            )
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                reason,
+                if scenario == "private_only" {
+                    "no_evidence"
+                } else {
+                    "conversation_changed"
+                }
+            );
+        }
+        server.abort();
+        h.close().await;
+    }
+}
+
+// 验证绑定的鉴权、乐观锁、身份核验及失败回滚；只覆盖本地 HTTP 协议，不证明真实提示已送达。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn takeover_self_chat_binding_requires_verified_owner_and_current_settings() {
+    let (h, f, server) = setup_takeover().await;
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let settings = snapshot(&h, &cookie).await;
+    let mut body = json!({"enabled":true,"self_test_enabled":true,"threshold":0.9,"version":0,"rules_revision":settings["rules_revision"]});
+    assert_eq!(
+        h.request("PUT", "/api/communications/takeover", None, body.clone())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    body["version"] = json!(99);
+    assert_eq!(
+        h.request(
+            "PUT",
+            "/api/communications/takeover",
+            Some(&cookie),
+            body.clone()
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert!(f.lock().unwrap().bindings.is_empty());
+    body["version"] = json!(0);
+    f.lock().unwrap().self_chat_bot_sender = true;
+    let (status, _, _) = h
+        .request(
+            "PUT",
+            "/api/communications/takeover",
+            Some(&cookie),
+            body.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(snapshot(&h, &cookie).await["self_test_chat_id"].is_null());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_sources")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    f.lock().unwrap().self_chat_bot_sender = false;
+    enable_self_test(&h, &cookie).await;
+    let count = f.lock().unwrap().bindings.len();
+    enable_self_test(&h, &cookie).await;
+    assert_eq!(f.lock().unwrap().bindings.len(), count);
     server.abort();
     h.close().await;
 }
