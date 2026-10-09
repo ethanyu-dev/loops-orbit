@@ -1,3 +1,5 @@
+mod diagnostics;
+
 use super::*;
 use orbit_server::communications::takeover;
 

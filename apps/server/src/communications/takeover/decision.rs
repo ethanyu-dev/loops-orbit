@@ -124,15 +124,15 @@ pub(super) async fn matching(
         None
     })
 }
-/// 生成后独立核对回答的完整性、证据和对外披露边界。
-pub(super) async fn review(state: &AppState, input: Value, threshold: f64) -> ApiResult<bool> {
+/// 返回真实复核概率供队列持久化；阈值比较由调用方执行，不生成模型未提供的拒绝理由。
+pub(super) async fn review(state: &AppState, input: Value) -> ApiResult<f64> {
     let response = ask(
         state,
         input,
         json!({"answerable":{"type":"noul","instructions":REVIEW_PROMPT}}),
     )
     .await?;
-    Ok(probability(&response, "answerable")? >= threshold)
+    probability(&response, "answerable")
 }
 /// 对外只暴露稳定错误类别，不携带上游地址、正文或密钥。
 fn error() -> ApiError {
