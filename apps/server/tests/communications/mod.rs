@@ -62,6 +62,14 @@ struct Fixture {
     reply_to_me: bool,
     /// 第一页返回交互卡片的可见文字结构。
     card: bool,
+    /// 第二页改成包含两份语言正文的富文本，验证不会重复合并。
+    multilingual_post: bool,
+    /// 用户信息接口拒绝读取，用于验证缺名不会阻断采集及后续重放可补名。
+    deny_names: bool,
+    /// 仅群成员接口失败，用户信息接口仍可补全姓名。
+    deny_members: bool,
+    /// 成员查询次数，用于确认单聊不再依赖群成员接口。
+    member_reads: usize,
     /// 自然日保持一致的测试时间.
     base: i64,
 }
@@ -86,6 +94,10 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         mention_me: false,
         reply_to_me: false,
         card: false,
+        multilingual_post: false,
+        deny_names: false,
+        deny_members: false,
+        member_reads: 0,
         base: chrono::Utc::now()
             .date_naive()
             .and_hms_opt(0, 0, 0)
@@ -112,7 +124,17 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         if let Some(gate) = gate { gate.arrived.notify_one(); gate.release.notified().await; }
         Json(data)
     }))
-    .route("/im/v1/chats/oc_fixture/members",get(|Query(query):Query<HashMap<String,String>>|async move {
+    .route("/contact/v3/users/batch",get(|State(fixture):State<Arc<Mutex<Fixture>>>,headers:HeaderMap,Query(query):Query<HashMap<String,String>>|async move {
+        assert_eq!(headers["authorization"],"Bearer fixture-user-access");
+        assert_eq!(query.get("user_id_type").map(String::as_str),Some("open_id"));
+        assert_eq!(query.get("user_ids").map(String::as_str),Some("ou_other"));
+        if fixture.lock().unwrap().deny_names {Json(json!({"code":99991672}))}
+        else {Json(json!({"code":0,"data":{"items":[{"open_id":"ou_other","name":"小林"},{"open_id":"ou_unrelated","name":"不能误用的姓名"}]}}))}
+    }))
+    .route("/im/v1/chats/oc_fixture/members",get(|State(fixture):State<Arc<Mutex<Fixture>>>,Query(query):Query<HashMap<String,String>>|async move {
+        let mut fixture=fixture.lock().unwrap();
+        fixture.member_reads+=1;
+        if fixture.deny_names || fixture.deny_members {return Json(json!({"code":99991672}));}
         if query.get("page_token").is_some_and(|s|s=="members_second") {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_other","name":"小林"}],"has_more":false}}))}
         else {Json(json!({"code":0,"data":{"items":[{"member_id":"ou_unrelated","name":"其他成员"}],"has_more":true,"page_token":"members_second"}}))}
     }))
@@ -134,6 +156,10 @@ async fn setup() -> (Harness, Arc<Mutex<Fixture>>, tokio::task::JoinHandle<()>) 
         }
         let second=query.get("page_token").is_some_and(|s|s=="second");
         if fixture.fail_second && second {return Json(json!({"code":999,"data":{}}));}
+        if fixture.multilingual_post && second {
+            let post=json!({"title":"","content":[[{"tag":"text","text":"上午说的冗余验收 case，误会了"}],[{"tag":"img","image_key":"img_fixture"}]]});
+            return Json(json!({"code":0,"data":{"items":[{"message_id":"om_other","chat_id":"oc_fixture","sender":{"id":"ou_other","id_type":"open_id","sender_type":"user"},"create_time":(fixture.base+1000).to_string(),"msg_type":"post","body":{"content":json!({"zh_cn":post,"en_us":post}).to_string()}}],"has_more":false}}));
+        }
         if fixture.bulk {
             assert_eq!(query.get("page_size").map(String::as_str),Some("50"));
             let items:Vec<Value>=(if second {50..60} else {0..50}).map(|i|json!({"message_id":format!("om_bulk_{i}"),"chat_id":"oc_fixture","sender":{"id":if i==59 {"cli_fixture"} else {"ou_other"},"id_type":if i==59 {"app_id"} else {"open_id"},"sender_type":if i==59 {"app"} else {"user"}},"create_time":(fixture.base+i*1000).to_string(),"msg_type":"text","body":{"content":json!({"text":format!("记录 {i}")}).to_string()}})).collect();

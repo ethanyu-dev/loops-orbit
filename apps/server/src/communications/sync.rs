@@ -170,11 +170,11 @@ pub(super) async fn page(
     }
     let mode = super::extraction::chat_mode(state, source, &token).await?;
     // 姓名查询不影响原文保存，成员分页直到找到当前页发送者或达到安全边界。
-    let names = super::members::names(state, source, &token, items, open_id).await;
+    let names = super::members::names(state, source, &token, items, open_id, &mode).await;
     let mut days: BTreeMap<String, Vec<store::Message>> = BTreeMap::new();
     for item in items {
         let mut message = normalize(item, &source.chat_id, open_id)?;
-        if message.sender_name.is_empty()
+        if message.sender_name.trim().is_empty()
             && message.sender_id_type == "open_id"
             && let Some(name) = names.get(&message.sender_id)
         {
@@ -364,7 +364,7 @@ pub(super) fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResul
         } else if message_type == "interactive" {
             text = super::extraction::card_text(&body);
         } else {
-            post_text(&body, &mut text);
+            text = super::post::text(&body);
         }
     }
     text = super::mentions::resolve(&text, &value["mentions"], open_id);
@@ -387,30 +387,4 @@ pub(super) fn normalize(value: &Value, chat_id: &str, open_id: &str) -> ApiResul
             json!({"mentions":value["mentions"],"body":value["body"],"root_id":value["root_id"],"parent_id":value["parent_id"],"thread_id":value["thread_id"]})
         },
     })
-}
-/// 富文本仅提取标题和文字节点，不把链接目标、图片键或嵌套代码当成动作。
-fn post_text(value: &Value, output: &mut String) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                post_text(item, output)
-            }
-        }
-        Value::Object(fields) => {
-            if let Some(text) = fields.get("text").and_then(Value::as_str) {
-                output.push_str(text);
-                output.push('\n');
-            }
-            if let Some(title) = fields.get("title").and_then(Value::as_str) {
-                output.push_str(title);
-                output.push('\n');
-            }
-            for (key, value) in fields {
-                if key != "text" && key != "title" {
-                    post_text(value, output);
-                }
-            }
-        }
-        _ => {}
-    }
 }

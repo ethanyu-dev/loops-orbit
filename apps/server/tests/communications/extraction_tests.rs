@@ -1,5 +1,110 @@
 use super::*;
 
+/// 验证富文本只保留一份语言正文、单聊缺名不阻断采集及重放补名；不连接真实飞书或校验租户授权。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn private_post_and_sender_name_are_repaired_on_replay() {
+    let (h, fixture, server) = setup().await;
+    {
+        let mut f = fixture.lock().unwrap();
+        f.multilingual_post = true;
+        f.deny_names = true;
+    }
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    let source = add(&h, &cookie).await;
+    replay(&h).await;
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM communication_documents LIMIT 1")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    let first = detail(&h, &cookie, id).await;
+    assert_eq!(first["total"], 2);
+    assert_eq!(
+        first["messages"][1]["text"],
+        "上午说的冗余验收 case，误会了"
+    );
+    assert_eq!(
+        first["messages"][1]["sender_name"],
+        "会话成员（姓名未获取）"
+    );
+    assert_eq!(first["messages"][1]["images"].as_array().unwrap().len(), 1);
+    // 只在隔离目录中回填旧解析结果，验证相同消息版本重新同步也会修复正文。
+    let hash: String =
+        sqlx::query_scalar("SELECT raw_hash FROM communication_documents WHERE id=$1")
+            .bind(id)
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap();
+    let directory = h
+        .state
+        .config
+        .memory
+        .as_ref()
+        .unwrap()
+        .directory
+        .join("_communications")
+        .join(source.to_string())
+        .join(id.to_string());
+    let raw = std::fs::read_to_string(directory.join(format!("{hash}.jsonl"))).unwrap();
+    let mut legacy = String::new();
+    for line in raw.lines() {
+        let mut message: Value = serde_json::from_str(line).unwrap();
+        if message["message_id"] == "om_other" {
+            message["text"] =
+                json!("上午说的冗余验收 case，误会了\n上午说的冗余验收 case，误会了\n");
+        }
+        legacy.push_str(&message.to_string());
+        legacy.push('\n');
+    }
+    let hash = auth::hash(&legacy);
+    std::fs::write(directory.join(format!("{hash}.jsonl")), legacy).unwrap();
+    sqlx::query("UPDATE communication_documents SET raw_hash=$2 WHERE id=$1")
+        .bind(id)
+        .bind(hash)
+        .execute(&h.state.pool)
+        .await
+        .unwrap();
+    fixture.lock().unwrap().deny_names = false;
+    replay(&h).await;
+    let repaired = detail(&h, &cookie, id).await;
+    assert_eq!(repaired["total"], 2);
+    assert_eq!(repaired["messages"][1]["sender_name"], "小林");
+    assert_eq!(
+        repaired["messages"][1]["text"],
+        first["messages"][1]["text"]
+    );
+    assert_eq!(fixture.lock().unwrap().member_reads, 0);
+    server.abort();
+    h.close().await;
+}
+
+/// 验证群成员接口拒绝时使用相同 open_id 查询用户姓名；本地响应不代表真实外部联系人的可见性。
+#[tokio::test]
+#[ignore = "需要显式 TEST_DATABASE_URL"]
+async fn group_sender_name_falls_back_to_user_information() {
+    let (h, fixture, server) = setup().await;
+    {
+        let mut f = fixture.lock().unwrap();
+        f.group = true;
+        f.mention_me = true;
+        f.deny_members = true;
+    }
+    let cookie = h.login().await;
+    connect(&h, &cookie).await;
+    add(&h, &cookie).await;
+    replay(&h).await;
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM communication_documents LIMIT 1")
+        .fetch_one(&h.state.pool)
+        .await
+        .unwrap();
+    let value = detail(&h, &cookie, id).await;
+    assert_eq!(value["messages"][1]["sender_name"], "小林");
+    assert!(fixture.lock().unwrap().member_reads > 0);
+    server.abort();
+    h.close().await;
+}
+
 /// 一份待升级群聊资料及其隔离测试资源，使用命名字段避免混淆来源和文档标识。
 struct OldGroup {
     /// 真实数据库与应用路由。
