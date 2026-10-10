@@ -356,7 +356,7 @@ async fn enqueue_reply(
     reply_to: &str,
     content: &str,
 ) -> ApiResult<()> {
-    // 飞书文本接口有消息大小限制；按字符截断保证 UTF-8 合法。
+    // 队列保留原有展示长度；最终卡片/富文本的序列化字节限制由投递层检查。
     let mut text: String = content.chars().take(6000).collect();
     if content.chars().count() > 6000 {
         text.push_str("\n\n（内容较长，完整回复请在网页查看。）");

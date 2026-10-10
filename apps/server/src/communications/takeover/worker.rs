@@ -204,8 +204,24 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
         return Ok("scope_changed");
     }
     let base = &state.config.feishu.as_ref().expect("已验证配置").api_base;
-    let sent = client::json_response(state.http.post(format!("{base}/im/v1/messages/{}/reply", message.message_id)).bearer_auth(token)
-        .json(&json!({"msg_type":"text","content":json!({"text":answer}).to_string(),"uuid":job.id.to_string()}))).await?;
+    let url = reqwest::Url::parse(&format!(
+        "{base}/im/v1/messages/{}/reply",
+        message.message_id
+    ))
+    .map_err(super::super::unavailable)?;
+    let sent = crate::feishu::message::send(
+        &state.http,
+        url,
+        &token,
+        crate::feishu::message::Outgoing {
+            id: job.id,
+            content: &answer,
+            receiver: None,
+            delegated: true,
+        },
+    )
+    .await
+    .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "communication_provider_rejected"))?;
     let sent_id = client::string(&sent["data"], "message_id")?;
     sqlx::query("UPDATE communication_takeover_jobs SET status='sent',sent_message_id=$2,reason=NULL,updated_at=now() WHERE id=$1 AND status='dispatching'").bind(job.id).bind(sent_id).execute(&state.pool).await?;
     Ok("sent")
@@ -269,6 +285,31 @@ async fn active(state: &AppState, job: &Job) -> ApiResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 验证新卡片、降级富文本及平台简化后的回采结构保留标识；不代替真实平台响应格式验收。
+    #[test]
+    fn rich_agent_replies_remain_excluded_after_normalization() {
+        let now = Utc::now().timestamp_millis();
+        for (kind, content) in [
+            (
+                "interactive",
+                json!({"schema":"2.0","body":{"elements":[{"tag":"markdown","content":"[Agent 自动回复]","text_size":"notation"},{"tag":"markdown","content":"可以，先注册账号。"}]}}),
+            ),
+            (
+                "interactive",
+                json!({"title":"","elements":[[{"tag":"text","text":"[Agent 自动回复]"}],[{"tag":"text","text":"可以，先注册账号。"}]]}),
+            ),
+            (
+                "post",
+                json!({"zh_cn":{"title":"","content":[[{"tag":"text","text":"[Agent 自动回复]"}],[{"tag":"md","text":"可以，先 **注册账号**。"}]]}}),
+            ),
+        ] {
+            let wire = json!({"message_id":"om_reply","chat_id":"oc_fixture","create_time":now.to_string(),"sender":{"id":"ou_owner","id_type":"open_id","sender_type":"user"},"msg_type":kind,"body":{"content":content.to_string()}});
+            let message = sync::normalize(&wire, "oc_fixture", "ou_owner").unwrap();
+            assert!(super::super::is_agent_message(&message.text));
+            assert!(!eligible(&message, now - 100, now, true));
+        }
+    }
+
     // 仅验证本地入队资格，真实私聊可读范围与实时性仍需租户验收。
     #[test]
     fn excludes_self_history_bots_and_agent_messages() {

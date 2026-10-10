@@ -1,3 +1,5 @@
+pub(crate) mod message;
+
 use crate::{
     AppState, api, auth,
     config::FeishuConfig,
@@ -401,27 +403,19 @@ async fn send_reply(
         url.query_pairs_mut()
             .append_pair("receive_id_type", "open_id");
     }
-    let mut body = json!({"msg_type":"text","content":json!({"text":delivery.content}).to_string(),"uuid":delivery.id.to_string()});
-    if let Some(receiver) = &delivery.receiver_id {
-        body["receive_id"] = json!(receiver);
-    }
-    let response: Value = http
-        .post(url)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|_| ())?
-        .error_for_status()
-        .map_err(|_| ())?
-        .json()
-        .await
-        .map_err(|_| ())?;
-    if response["code"].as_i64() == Some(0) {
-        Ok(())
-    } else {
-        Err(())
-    }
+    message::send(
+        http,
+        url,
+        &token,
+        message::Outgoing {
+            id: delivery.id,
+            content: &delivery.content,
+            receiver: delivery.receiver_id.as_deref(),
+            delegated: false,
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// 获取短期平台访问令牌；令牌不持久化且不进入日志。
