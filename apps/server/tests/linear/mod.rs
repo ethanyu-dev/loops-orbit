@@ -2,6 +2,8 @@ use super::*;
 use agent_runtime::tools::Host as _;
 use orbit_server::tools::Host;
 
+mod identity_tests;
+
 // 固定 UUID 只用于本地协议夹具，与真实 Linear 账号无关。
 const USER: &str = "11111111-1111-4111-8111-111111111111";
 const TEAM: &str = "22222222-2222-4222-8222-222222222222";

@@ -183,7 +183,7 @@ export function Integrations({ report }: { report: (error: unknown) => void }) {
               )}
             </div>
             <p className="integration-scope">
-              仅用于你的 Orbit 网页对话，操作范围以 Linear 权限为准。
+              可用于你的 Orbit 网页对话和已绑定为本人的飞书账号，操作范围以 Linear 权限为准。
             </p>
           </>
         )}
