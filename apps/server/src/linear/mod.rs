@@ -1,3 +1,4 @@
+mod access;
 mod client;
 mod connection;
 mod queries;
@@ -91,9 +92,9 @@ fn unavailable(_: impl std::fmt::Display) -> ApiError {
 fn invalid() -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, "invalid_arguments")
 }
-/// 个人密钥仅供 Orbit 网页所有者使用，不要求此人在 Linear 中具有管理员角色。
+/// 网页所有者与已绑定且仍在白名单中的本人飞书账号共享连接。
 async fn connection(state: &AppState, owner: &str) -> ApiResult<Option<Connection>> {
-    if owner != "admin" {
+    if !crate::auth::is_account_owner(state, owner).await? {
         return Ok(None);
     }
     Ok(connection::current(state)

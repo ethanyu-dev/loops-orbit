@@ -1,4 +1,4 @@
-use super::{Connection, client, invalid, queries, unavailable};
+use super::{Connection, access::Access, client, invalid, queries, unavailable};
 use crate::{
     AppState, auth,
     error::{ApiError, ApiResult},
@@ -23,19 +23,6 @@ struct Update {
     evidence: String,
     /// 字段白名单保留 omitted 与 null 的区别。
     patch: Value,
-}
-/// 读取与更新都拒绝旧任务；工具不能指定其他 owner。
-pub(super) async fn active(state: &AppState, job: &Job) -> ApiResult<()> {
-    let active: bool = sqlx::query_scalar(include_str!("../sql/linear_run_active.sql"))
-        .bind(job.id)
-        .bind(job.lease_token)
-        .fetch_one(&state.pool)
-        .await?;
-    if active {
-        Ok(())
-    } else {
-        Err(ApiError(StatusCode::CONFLICT, "run_superseded"))
-    }
 }
 /// 验证白名单并转为供应商字段名，空补丁和错误类型在网络前拒绝。
 fn patch(input: &Value, connection: &Connection) -> ApiResult<Value> {
@@ -84,6 +71,7 @@ fn patch(input: &Value, connection: &Connection) -> ApiResult<Value> {
 pub(super) async fn execute(
     state: &AppState,
     job: &Job,
+    access: &Access,
     inputs: &[String],
     connection: &Connection,
     token: &str,
@@ -144,6 +132,8 @@ pub(super) async fn execute(
         }
     }
     let mut tx = state.pool.begin().await?;
+    // 绑定锁持有到派发记录提交，解绑先完成时不能继续登记更新。
+    access.lock(&mut tx).await?;
     // 与断开和重连共用连接锁；落盘后请求才可能发送，之后取消不能撤回平台已接受的修改。
     let allowed: Option<Uuid> = sqlx::query_scalar(
         "SELECT generation FROM linear_connections WHERE owner='admin' AND generation=$1 AND status='active' AND key_fingerprint=$2 FOR UPDATE",
@@ -155,7 +145,7 @@ pub(super) async fn execute(
     if allowed.is_none() {
         return Err(ApiError(StatusCode::CONFLICT, "linear_connection_changed"));
     }
-    active(state, job).await?;
+    access.active(state, job).await?;
     let inserted = sqlx::query(include_str!("../sql/linear_operation_claim.sql"))
         .bind(&key)
         .bind(job.id)
