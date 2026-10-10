@@ -1,4 +1,4 @@
--- 代际阻止删除重连后的版本复用；短时间内已发送或更新输入的会话不再处理旧消息。
+-- 代际、轮次版本、会话控制和冷却共同构成发送围栏。
 SELECT EXISTS(
     SELECT 1 FROM communication_takeover_jobs j
     JOIN communication_sources s ON s.id=j.source_id
@@ -13,7 +13,9 @@ SELECT EXISTS(
       AND (j.message->>'is_me'='false' OR
            (j.message->>'is_me'='true' AND t.self_test_chat_id=s.chat_id AND j.message->>'sender_id'=c.open_id))
       AND (j.message->>'create_time')::bigint >= t.since_ms
-      AND NOT EXISTS(SELECT 1 FROM communication_takeover_jobs newer WHERE newer.source_id=s.id
-          AND ((newer.message->>'create_time')::bigint > (j.message->>'create_time')::bigint
-            OR (newer.status='sent' AND newer.updated_at>now()-interval '30 seconds')))
+      AND EXISTS(SELECT 1 FROM communication_takeover_turns turn
+          JOIN communication_takeover_sessions session ON session.source_id=turn.source_id AND session.epoch=turn.epoch
+          WHERE turn.id=j.turn_id AND turn.revision=j.turn_revision AND turn.status='pending'
+            AND session.mode='auto' AND session.window_ready AND s.window_end IS NULL
+            AND (session.last_sent_at IS NULL OR session.last_sent_at<=now()-interval '5 seconds'))
 )

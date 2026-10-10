@@ -79,6 +79,22 @@ async fn cancel_scope(
     sources: Option<Vec<String>>,
 ) -> ApiResult<()> {
     let mut tx = state.pool.begin().await?;
+    // 日资料的正常追加也会取消旧摘要依赖，但不能清掉仍在进行的代答轮次。
+    if document.is_none() {
+        // 来源遗忘或暂停同时清除代答保存的正文、草稿和上下文；只保留投递 ID 与状态供去重核对。
+        let takeover_sources: Vec<Uuid> = sqlx::query_scalar("SELECT source_id FROM communication_takeover_sessions WHERE ($1::text IS NULL OR source_id IN(SELECT source_id FROM communication_documents WHERE id::text=$1)) AND ($2::text[] IS NULL OR source_id::text=ANY($2)) ORDER BY source_id FOR UPDATE")
+        .bind(document.map(|id|id.to_string())).bind(&sources).fetch_all(&mut *tx).await?;
+        sqlx::query("UPDATE communication_takeover_jobs SET status=CASE WHEN status IN ('queued','evaluating') THEN 'ignored' ELSE status END,reason=CASE WHEN status IN ('queued','evaluating') THEN 'scope_changed' ELSE reason END,message='{}',context=NULL,draft_answer=NULL,answer=NULL WHERE source_id=ANY($1)")
+        .bind(&takeover_sources).execute(&mut *tx).await?;
+        sqlx::query("UPDATE communication_takeover_turns SET status='closed',inputs='[]' WHERE source_id=ANY($1)")
+        .bind(&takeover_sources).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM communication_takeover_inputs WHERE source_id=ANY($1)")
+            .bind(&takeover_sources)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE communication_takeover_sessions SET epoch=$2,boundary_ms=(extract(epoch FROM clock_timestamp())*1000)::bigint,topic=NULL,version=version+1,updated_at=now() WHERE source_id=ANY($1)")
+        .bind(&takeover_sources).bind(Uuid::new_v4()).execute(&mut *tx).await?;
+    }
     sqlx::query("SELECT id FROM conversations WHERE owner='admin' OR owner IN(SELECT 'feishu:'||open_id FROM communication_connections) ORDER BY id FOR UPDATE").execute(&mut *tx).await?;
     let ids:Vec<Uuid>=sqlx::query_scalar("UPDATE followups SET status='cancelled',version=version+1,lease_token=NULL,error='communication_source_changed',updated_at=now() WHERE memory_versions ? '_communication' AND ($1::text IS NULL OR memory_versions->'_communication'->>'document_id'=$1) AND ($2::text[] IS NULL OR memory_versions->'_communication'->>'source_id'=ANY($2)) AND status IN('scheduled','checking','queued') RETURNING id")
         .bind(document.map(|id|id.to_string())).bind(&sources).fetch_all(&mut *tx).await?;

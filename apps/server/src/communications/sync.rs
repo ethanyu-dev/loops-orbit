@@ -215,6 +215,14 @@ pub(super) async fn page(
             return Ok(());
         }
     }
+    if history_job.is_none() && mode == "p2p" {
+        sqlx::query(
+            "UPDATE communication_takeover_sessions SET window_ready=false WHERE source_id=$1",
+        )
+        .bind(source.id)
+        .execute(&state.pool)
+        .await?;
+    }
     for (day, messages) in days {
         commit_day(state, source, &day, messages.clone()).await?;
         if history_job.is_none() && mode == "p2p" {
@@ -232,6 +240,14 @@ pub(super) async fn page(
     } else {
         sqlx::query("UPDATE communication_sources SET window_start=$2,window_end=$3,page_token=$4,watermark=CASE WHEN $5 THEN watermark ELSE GREATEST(watermark,$6) END,last_synced_at=CASE WHEN $5 THEN last_synced_at ELSE now() END,next_sync=now()+make_interval(secs=>$7),audit_at=CASE WHEN NOT $5 AND $8 THEN now()+interval '1 day' ELSE audit_at END,error=NULL WHERE id=$1 AND version=$9")
         .bind(source.id).bind(if more {source.window_start} else {None}).bind(if more {source.window_end} else {None}).bind(if more {next} else {""}).bind(more).bind(source.window_end.unwrap_or(source.watermark)).bind(if more {1.0} else {sync_seconds as f64}).bind(source.window_start==Some(source.start_at)).bind(source.version).execute(&state.pool).await?;
+    }
+    if history_job.is_none() && mode == "p2p" && !more {
+        sqlx::query(
+            "UPDATE communication_takeover_sessions SET window_ready=true WHERE source_id=$1",
+        )
+        .bind(source.id)
+        .execute(&state.pool)
+        .await?;
     }
     Ok(())
 }
