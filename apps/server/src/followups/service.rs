@@ -15,6 +15,16 @@ const CANCEL_OUTBOX: &str = include_str!("../sql/followup_cancel_outbox.sql");
 
 /// 偏好行同时作为同一身份创建配额和回访发送频率的串行锁。
 pub async fn preferences(state: &AppState, owner: &str) -> ApiResult<Preferences> {
+    // 来源行保留给旧提醒外键，实际偏好按本人主体共享。
+    sqlx::query(
+        "INSERT INTO followup_preferences(owner,timezone) VALUES($1,$2) ON CONFLICT DO NOTHING",
+    )
+    .bind(owner)
+    .bind(&state.config.followup_timezone)
+    .execute(&state.pool)
+    .await?;
+    let canonical = crate::todos::identity::principal(state, owner).await?;
+    let owner = canonical.as_str();
     sqlx::query(
         "INSERT INTO followup_preferences(owner,timezone) VALUES($1,$2) ON CONFLICT DO NOTHING",
     )
@@ -36,30 +46,45 @@ pub(super) async fn save_preferences_with_source(
     prefs: &Preferences,
     source: Option<&Source<'_>>,
 ) -> ApiResult<()> {
+    let canonical = crate::todos::identity::principal(state, owner).await?;
+    let owner = canonical.as_str();
     policy::validate(prefs)?;
     preferences(state, owner).await?;
     let mut tx = state.pool.begin().await?;
-    // 与遗忘采用相同会话锁顺序，避免关闭偏好与在途判断互相覆盖。
-    sqlx::query("SELECT id FROM conversations WHERE owner=$1 ORDER BY id FOR UPDATE")
-        .bind(owner)
+    // 与待办调度统一锁序，避免会话锁和事项锁交叉等待。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('orbit:todos:admin'))")
         .execute(&mut *tx)
         .await?;
+    // 与遗忘采用相同会话锁顺序，避免关闭偏好与在途判断互相覆盖。
+    sqlx::query(
+        "SELECT id FROM conversations WHERE personal_owner(owner)=$1 ORDER BY id FOR UPDATE",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
     if source_fence(&mut tx, source).await?.is_some() {
         return Ok(());
     }
+    // 只有明确从开启切到关闭才停止回访；关闭状态下调整静默时间不撤销单项授权。
+    let was_enabled: bool =
+        sqlx::query_scalar("SELECT enabled FROM followup_preferences WHERE owner=$1 FOR UPDATE")
+            .bind(owner)
+            .fetch_one(&mut *tx)
+            .await?;
     let changed=sqlx::query("UPDATE followup_preferences SET timezone=$2,enabled=$3,quiet_start=$4,quiet_end=$5,min_interval_minutes=$6,version=version+1 WHERE owner=$1 AND version=$7")
         .bind(owner).bind(&prefs.timezone).bind(prefs.enabled).bind(prefs.quiet_start).bind(prefs.quiet_end).bind(prefs.min_interval_minutes).bind(prefs.version).execute(&mut *tx).await?;
     if changed.rows_affected() == 0 {
         return Err(ApiError(StatusCode::CONFLICT, "followup_version_conflict"));
     }
-    if !prefs.enabled {
+    if was_enabled && !prefs.enabled {
+        sqlx::query("UPDATE todo_schedules SET status='paused',version=version+1 WHERE kind='checkin' AND todo_id IN(SELECT id FROM todos WHERE owner=$1)").bind(owner).execute(&mut *tx).await?;
         sqlx::query(
-            "UPDATE followup_discovery SET status='completed' WHERE owner=$1 AND status='queued'",
+            "UPDATE followup_discovery SET status='completed' WHERE personal_owner(owner)=$1 AND status='queued'",
         )
         .bind(owner)
         .execute(&mut *tx)
         .await?;
-        let ids:Vec<Uuid>=sqlx::query_scalar("UPDATE followups SET status='cancelled',version=version+1,lease_token=NULL,updated_at=now() WHERE owner=$1 AND kind='checkin' AND status IN('scheduled','checking','queued') RETURNING id")
+        let ids:Vec<Uuid>=sqlx::query_scalar("UPDATE followups SET status='cancelled',version=version+1,lease_token=NULL,updated_at=now() WHERE personal_owner(owner)=$1 AND kind='checkin' AND status IN('scheduled','checking','queued') RETURNING id")
             .bind(owner).fetch_all(&mut *tx).await?;
         for id in ids {
             sqlx::query(CANCEL_OUTBOX)
@@ -207,6 +232,10 @@ pub async fn create(
         Some(guard)
     };
     let mut tx = state.pool.begin().await?;
+    // 与待办调度统一锁序，避免会话锁和事项锁交叉等待。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('orbit:todos:admin'))")
+        .execute(&mut *tx)
+        .await?;
     let conversation = if let Some(id) = input.conversation_id {
         let found: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM conversations WHERE id=$1 AND owner=$2 FOR UPDATE")
@@ -230,10 +259,11 @@ pub async fn create(
     if let Some(result) = source_fence(&mut tx, source).await? {
         return Ok(result);
     }
+    let canonical = crate::todos::identity::principal(state, owner).await?;
     let (enabled, pref_version): (bool, i64) = sqlx::query_as(
         "SELECT enabled,version FROM followup_preferences WHERE owner=$1 FOR UPDATE",
     )
-    .bind(owner)
+    .bind(&canonical)
     .fetch_one(&mut *tx)
     .await?;
     if pref_version != prefs.version {
@@ -282,7 +312,17 @@ pub async fn create(
         .bind(request_hash)
         .execute(&mut *tx)
         .await?;
-    let result = json!({"id":id,"version":1,"status":"scheduled","due_at":due,"expires_at":expiry,"timezone":prefs.timezone,"topic":input.topic,"conversation_id":conversation});
+    // 自动发现只产生待确认候选，与创建同事务提交，重试不会覆盖之后的用户确认。
+    let candidate = canonical == "admin" && source.is_some_and(|s| s.discovery_attempt.is_some());
+    if candidate {
+        sqlx::query("UPDATE todos SET status='needs_user',next_action='确认是否需要主动回访',version=version+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE todo_schedules SET status='paused',version=version+1 WHERE id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        crate::todos::service::cancel_pending(&mut tx, id).await?;
+    }
+    let result = json!({"id":id,"version":if candidate {2} else {1},"status":if candidate {"cancelled"} else {"scheduled"},"due_at":due,"expires_at":expiry,"timezone":prefs.timezone,"topic":input.topic,"conversation_id":conversation});
     record(&mut tx, source, &result).await?;
     tx.commit().await?;
     Ok(result)
@@ -322,6 +362,10 @@ pub async fn update(
         return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_followup"));
     }
     let mut tx = state.pool.begin().await?;
+    // 与待办调度统一锁序，避免会话锁和事项锁交叉等待。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('orbit:todos:admin'))")
+        .execute(&mut *tx)
+        .await?;
     // 先锁来源/目标会话，再锁事项；跨会话的明确更新使用固定顺序避免死锁。
     sqlx::query(include_str!("../sql/followup_lock_conversations.sql"))
         .bind(owner)
@@ -332,12 +376,13 @@ pub async fn update(
     if let Some(result) = source_fence(&mut tx, source).await? {
         return Ok(result);
     }
-    let current_prefs: Preferences = sqlx::query_as("SELECT timezone,enabled,quiet_start,quiet_end,min_interval_minutes,version FROM followup_preferences WHERE owner=$1 FOR UPDATE").bind(owner).fetch_one(&mut *tx).await?;
+    let canonical = crate::todos::identity::principal(state, owner).await?;
+    let current_prefs: Preferences = sqlx::query_as("SELECT timezone,enabled,quiet_start,quiet_end,min_interval_minutes,version FROM followup_preferences WHERE owner=$1 FOR UPDATE").bind(&canonical).fetch_one(&mut *tx).await?;
     if current_prefs.version != prefs.version {
         return Err(ApiError(StatusCode::CONFLICT, "followup_version_conflict"));
     }
     let current: Followup = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM followups WHERE id=$1 AND owner=$2 FOR UPDATE"
+        "SELECT {COLUMNS} FROM followups WHERE id=$1 AND personal_owner(owner)=personal_owner($2) FOR UPDATE"
     )))
     .bind(id)
     .bind(owner)
@@ -366,13 +411,26 @@ pub async fn update(
         .await?;
     sqlx::query(include_str!("../sql/followup_update.sql"))
         .bind(id)
-        .bind(owner)
+        .bind(&current.owner)
         .bind(&input.status)
         .bind(&input.topic)
         .bind(due)
         .bind(&prefs.timezone)
         .execute(&mut *tx)
         .await?;
+    if input.status == "scheduled" {
+        sqlx::query("UPDATE todos SET status='active',closed_at=NULL,version=version+1,updated_at=now() WHERE id=(SELECT todo_id FROM todo_schedules WHERE id=(SELECT todo_schedule_id FROM followups WHERE id=$1))")
+            .bind(id).execute(&mut *tx).await?;
+    }
+    if matches!(input.status.as_str(), "completed" | "cancelled") {
+        sqlx::query("UPDATE todos SET status=$2,version=version+1,closed_at=now(),updated_at=now() WHERE id=(SELECT todo_id FROM todo_schedules WHERE id=(SELECT todo_schedule_id FROM followups WHERE id=$1))")
+            .bind(id).bind(&input.status).execute(&mut *tx).await?;
+        let schedules: Vec<Uuid> = sqlx::query_scalar("UPDATE todo_schedules SET status='ended',version=version+1 WHERE todo_id=(SELECT todo_id FROM todo_schedules WHERE id=(SELECT todo_schedule_id FROM followups WHERE id=$1)) RETURNING id")
+            .bind(id).fetch_all(&mut *tx).await?;
+        for schedule in schedules {
+            crate::todos::service::cancel_pending(&mut tx, schedule).await?;
+        }
+    }
     let result = json!({"id":id,"version":current.version+1,"status":input.status,"due_at":due.unwrap_or(current.due_at),"timezone":prefs.timezone,"delivery_may_have_started":started});
     record(&mut tx, source, &result).await?;
     tx.commit().await?;

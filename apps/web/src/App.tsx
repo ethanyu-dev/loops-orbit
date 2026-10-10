@@ -21,9 +21,7 @@ const Memory = lazy(() => import('./features/memory/Memory').then((m) => ({ defa
 const Knowledge = lazy(() =>
   import('./features/knowledge/Knowledge').then((m) => ({ default: m.Knowledge })),
 );
-const Followups = lazy(() =>
-  import('./features/followups/Followups').then((m) => ({ default: m.Followups })),
-);
+const Todos = lazy(() => import('./features/todos/Todos').then((m) => ({ default: m.Todos })));
 const Health = lazy(() => import('./features/status/Health').then((m) => ({ default: m.Health })));
 const Communications = lazy(() =>
   import('./features/communications/Communications').then((m) => ({ default: m.Communications })),
@@ -201,18 +199,23 @@ export function App({ incomingToken }: { incomingToken: string | null }) {
                   )
                 }
               />
+              <Route path="/followups" element={<Navigate to="/todos" replace />} />
               <Route
-                path="/followups"
+                path="/todos/:todoId?"
                 element={
-                  <Followups
-                    report={report}
-                    notifications={notifications.data}
-                    refreshNotifications={notifications.refresh}
-                    openConversation={(id) => {
-                      setSelected(id);
-                      void loadConversations().catch(report);
-                    }}
-                  />
+                  session.identity.admin ? (
+                    <Todos
+                      report={report}
+                      notifications={notifications.data}
+                      refreshNotifications={notifications.refresh}
+                      openConversation={(id) => {
+                        setSelected(id);
+                        void loadConversations().catch(report);
+                      }}
+                    />
+                  ) : (
+                    <Unavailable forbidden />
+                  )
                 }
               />
               <Route

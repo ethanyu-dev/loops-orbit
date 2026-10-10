@@ -2,6 +2,20 @@ import { apiUrl } from './config';
 
 // 服务端业务错误到界面提示的映射，不暴露上游原始响应。
 const ERRORS: Record<string, string> = {
+  personal_identity_required: '待办仅供本人使用，请登录管理员账号或绑定本人飞书。',
+  identity_changed: '本人绑定已变化，请刷新后重试。',
+  identity_verification_required: '请先在飞书沟通资料页重新授权本人账号。',
+  invalid_todo: '请填写有效的待办名称，名称最多 500 字，说明最多 4,000 字。',
+  invalid_todo_schedule: '请检查安排：时间须在未来一年内、时区有效，周期结束时间晚于首次执行时间。',
+  invalid_timezone: '请输入有效的 IANA 时区，例如 Asia/Shanghai。',
+  todo_not_found: '待办不存在或你无权访问。',
+  todo_version_conflict: '待办或安排已在另一个入口更新，请刷新后核对再保存。',
+  todo_idempotency_conflict: '本次操作内容已改变，请调整表单后重新提交。',
+  todo_feishu_identity_required: '请先绑定本人飞书；存在多个绑定时请从目标飞书会话设置安排。',
+  todo_limit: '待处理事项已达 1,000 条，请先整理。',
+  todo_schedule_limit: '该待办的安排已达 20 条，请编辑已有安排。',
+  todo_resource_unavailable: '来源不存在或当前不可访问，请核对来源。',
+  linear_not_connected: '请先在外部连接页验证 Linear 账号。',
   invalid_knowledge: '请填写有效的知识主题和正文，主题最多 120 字，正文最多 2,000 字。',
   knowledge_extraction_not_found: '这次知识提取任务已不存在，请重新打开文件后操作。',
   knowledge_not_found: '这条知识已不存在，请刷新。',

@@ -44,11 +44,10 @@ impl Identity {
 }
 /// 管理员登录或当前已绑定的同一飞书账号才是本人，白名单不构成本人证明。
 pub(crate) async fn is_account_owner(state: &AppState, owner: &str) -> ApiResult<bool> {
-    if owner == "admin" {
-        return Ok(true);
-    }
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_connections WHERE owner='admin' AND status='active' AND 'feishu:'||open_id=$1)")
-        .bind(owner).fetch_one(&state.pool).await?)
+    Ok(
+        crate::todos::identity::principal(state, owner).await? == "admin"
+            && crate::followups::policy::owner_allowed(state, owner).await?,
+    )
 }
 
 /// 联合查询后的认证记录，字段名明确区分会话与授权的有效期。

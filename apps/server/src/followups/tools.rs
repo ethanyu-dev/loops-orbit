@@ -51,7 +51,7 @@ impl<'a> Host<'a> {
     }
     /// 查询真实版本后模型才有修改目标，限制返回量避免无限增长上下文。
     async fn list(&self) -> crate::error::ApiResult<Value> {
-        let rows:Vec<(Uuid,String,String,String,i64,chrono::DateTime<chrono::Utc>)>=sqlx::query_as("SELECT id,topic,kind,status,version,due_at FROM followups WHERE owner=$1 AND status IN('scheduled','checking','queued','sent') ORDER BY updated_at DESC LIMIT 100")
+        let rows:Vec<(Uuid,String,String,String,i64,chrono::DateTime<chrono::Utc>)>=sqlx::query_as("SELECT id,topic,kind,status,version,due_at FROM followups WHERE personal_owner(owner)=personal_owner($1) AND status IN('scheduled','checking','queued','sent') ORDER BY updated_at DESC LIMIT 100")
             .bind(&self.owner).fetch_all(&self.state.pool).await?;
         Ok(json!(rows.into_iter().map(|(id,topic,kind,status,version,due_at)|json!({"id":id,"topic":topic,"kind":kind,"status":status,"version":version,"due_at":due_at})).collect::<Vec<_>>()))
     }

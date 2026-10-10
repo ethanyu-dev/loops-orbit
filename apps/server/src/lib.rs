@@ -10,6 +10,7 @@ pub mod knowledge;
 pub mod linear;
 pub mod memory;
 pub mod rag;
+pub mod todos;
 pub mod tools;
 pub mod worker;
 
@@ -103,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/me", get(auth::me))
         .nest("/api/communications", communications::routes::router())
         .nest("/api/linear", linear::routes::router())
+        .nest("/api/todos", todos::routes::router())
         .nest("/api/knowledge", knowledge::routes::router())
         .route(
             "/api/followups",

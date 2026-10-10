@@ -69,12 +69,20 @@ pub async fn process_one(state: &AppState, kind: &str) -> ApiResult<bool> {
         finish(state, &job, "cancelled", Some("memory_changed")).await?;
         return Ok(true);
     }
+    if !crate::todos::scheduler::delivery_allowed(state, job.id).await? {
+        finish(state, &job, "cancelled", Some("todo_schedule_changed")).await?;
+        return Ok(true);
+    }
     if job.kind == "reminder" {
-        queue(state, &job, &format!("提醒你：{}", job.topic), None).await?;
+        match crate::todos::execution::generate(state, &job).await {
+            Ok(Some(text)) => queue(state, &job, &text, None).await?,
+            Ok(None) => queue(state, &job, &format!("提醒你：{}", job.topic), None).await?,
+            Err(_) => retry(state, &job).await?,
+        }
         return Ok(true);
     }
     let prefs = preferences(state, &job.owner).await?;
-    if !prefs.enabled {
+    if !prefs.enabled && !crate::todos::scheduler::explicit_checkin(state, job.id).await? {
         finish(state, &job, "cancelled", None).await?;
         return Ok(true);
     }
@@ -82,7 +90,7 @@ pub async fn process_one(state: &AppState, kind: &str) -> ApiResult<bool> {
         defer(state, &job, policy::next_awake(&prefs, Utc::now())).await?;
         return Ok(true);
     }
-    let (seq,last): (i64,Option<DateTime<Utc>>)=sqlx::query_as("SELECT COALESCE(max(seq),0),max(created_at) FROM runs WHERE conversation_id IN(SELECT id FROM conversations WHERE owner=$1)")
+    let (seq,last): (i64,Option<DateTime<Utc>>)=sqlx::query_as("SELECT COALESCE(max(seq),0),max(created_at) FROM runs WHERE conversation_id IN(SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($1))")
         .bind(&job.owner).fetch_one(&state.pool).await?;
     if last.is_some_and(|t| t > Utc::now() - Duration::minutes(ACTIVE_GRACE_MINUTES)) {
         defer(
@@ -148,10 +156,11 @@ pub async fn process_one(state: &AppState, kind: &str) -> ApiResult<bool> {
     } else {
         json!([])
     };
+    let todo_context = crate::todos::scheduler::context(state, job.id).await?;
     let decision = tokio::time::timeout(
         std::time::Duration::from_secs(35),
         state.runtime.followup_decision(
-            &json!({"now":Utc::now(),"followup":job,"recent_messages":history,"memory":memory,"communication":job.memory_versions["_communication"]}),
+            &json!({"now":Utc::now(),"followup":job,"recent_messages":history,"memory":memory,"communication":job.memory_versions["_communication"],"todo":todo_context}),
             false,
         ),
     )
@@ -172,11 +181,11 @@ pub async fn process_one(state: &AppState, kind: &str) -> ApiResult<bool> {
         Some(Decision { decision, .. }) if decision == "complete" || decision == "cancel" => {
             // 同来源会话输入提交与终止判断共用行锁，旧模型不能结束更新后的事项。
             let mut tx = state.pool.begin().await?;
-            sqlx::query("SELECT id FROM conversations WHERE owner=$1 ORDER BY id FOR UPDATE")
+            sqlx::query("SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($1) ORDER BY id FOR UPDATE")
                 .bind(&job.owner)
                 .execute(&mut *tx)
                 .await?;
-            let unchanged: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM runs WHERE conversation_id IN(SELECT id FROM conversations WHERE owner=$1) AND seq>$2)").bind(&job.owner).bind(seq).fetch_one(&mut *tx).await?;
+            let unchanged: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM runs WHERE conversation_id IN(SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($1)) AND seq>$2)").bind(&job.owner).bind(seq).fetch_one(&mut *tx).await?;
             if unchanged {
                 sqlx::query("UPDATE followups SET status=$4,lease_token=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND version=$2 AND lease_token=$3 AND status='checking'")
                     .bind(job.id).bind(job.version).bind(job.lease_token).bind(if decision == "complete" { "completed" } else { "cancelled" }).execute(&mut *tx).await?;
@@ -235,12 +244,17 @@ pub async fn queue(
     seen_seq: Option<i64>,
 ) -> ApiResult<()> {
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM conversations WHERE owner=$1 ORDER BY id FOR UPDATE")
+    // 与待办完成、暂停及解绑共用锁，校验通过后不能被旧投递覆盖取消。
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('orbit:todos:admin'))")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($1) ORDER BY id FOR UPDATE")
         .bind(&job.owner)
         .execute(&mut *tx)
         .await?;
+    let canonical = crate::todos::identity::principal(state, &job.owner).await?;
     sqlx::query("SELECT owner FROM followup_preferences WHERE owner=$1 FOR UPDATE")
-        .bind(&job.owner)
+        .bind(&canonical)
         .execute(&mut *tx)
         .await?;
     let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM followups WHERE id=$1 AND version=$2 AND lease_token=$3 AND status='checking' AND expires_at>now())")
@@ -276,7 +290,13 @@ pub async fn can_deliver(
     job: &Followup,
     seen_seq: Option<i64>,
 ) -> ApiResult<bool> {
-    if !policy::owner_allowed(state, &job.owner).await? || job.expires_at <= Utc::now() {
+    if !crate::todos::execution::dependencies_valid(state, job.id).await? {
+        return Ok(false);
+    }
+    if !crate::todos::scheduler::delivery_allowed(state, job.id).await?
+        || !policy::owner_allowed(state, &job.owner).await?
+        || job.expires_at <= Utc::now()
+    {
         return Ok(false);
     }
     if !policy::dependencies_valid(state, job).await? {
@@ -286,8 +306,10 @@ pub async fn can_deliver(
         return Ok(true);
     }
     // 此处可能已有偏好行锁，只读快照，不能在另一连接尝试插入同一行。
-    let prefs: super::Preferences = sqlx::query_as("SELECT timezone,enabled,quiet_start,quiet_end,min_interval_minutes,version FROM followup_preferences WHERE owner=$1").bind(&job.owner).fetch_one(&state.pool).await?;
-    if !prefs.enabled || policy::is_quiet(&prefs, Utc::now()) {
+    let prefs: super::Preferences = sqlx::query_as("SELECT timezone,enabled,quiet_start,quiet_end,min_interval_minutes,version FROM followup_preferences WHERE owner=personal_owner($1)").bind(&job.owner).fetch_one(&state.pool).await?;
+    if (!prefs.enabled && !crate::todos::scheduler::explicit_checkin(state, job.id).await?)
+        || policy::is_quiet(&prefs, Utc::now())
+    {
         return Ok(false);
     }
     let suppressed: bool = sqlx::query_scalar(include_str!("../sql/followup_suppressed.sql"))
@@ -310,10 +332,12 @@ pub async fn acknowledge(
     sqlx::query("UPDATE followups SET status='sent',sent_at=now(),lease_token=NULL,lease_until=NULL,error=NULL,updated_at=now() WHERE id=$1 AND version=$2")
         .bind(job.id).bind(job.version).execute(&mut **tx).await?;
     if job.kind == "checkin" {
-        sqlx::query("UPDATE followup_preferences SET last_checkin_at=now() WHERE owner=$1")
-            .bind(&job.owner)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query(
+            "UPDATE followup_preferences SET last_checkin_at=now() WHERE owner=personal_owner($1)",
+        )
+        .bind(&job.owner)
+        .execute(&mut **tx)
+        .await?;
     }
     sqlx::query("UPDATE conversations SET updated_at=now() WHERE id=$1")
         .bind(job.conversation_id)
@@ -342,9 +366,12 @@ pub async fn prepare_delivery(
             .execute(&mut *tx)
             .await?;
         sqlx::query("UPDATE outbox SET status='cancelled' WHERE followup_id=$1 AND followup_version=$2 AND status IN('queued','running')").bind(id).bind(version).execute(&mut *tx).await?;
-        let cancelled = !policy::dependencies_valid(state, &job).await?
+        let cancelled = !crate::todos::scheduler::delivery_allowed(state, job.id).await?
+            || !policy::dependencies_valid(state, &job).await?
             || !policy::owner_allowed(state, &job.owner).await?
-            || (job.kind == "checkin" && !preferences(state, &job.owner).await?.enabled);
+            || (job.kind == "checkin"
+                && !preferences(state, &job.owner).await?.enabled
+                && !crate::todos::scheduler::explicit_checkin(state, job.id).await?);
         // 废弃该队列身份，新一次判断使用新版本，避免重用旧正文。
         sqlx::query(include_str!("../sql/followup_reconsider.sql"))
             .bind(id)

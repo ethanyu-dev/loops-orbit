@@ -78,6 +78,10 @@ async fn main() -> anyhow::Result<()> {
         "checkin",
         receiver.clone(),
     ));
+    workers.spawn(orbit_server::todos::scheduler::run(
+        state.clone(),
+        receiver.clone(),
+    ));
     workers.spawn(followups::discovery::run(state.clone(), receiver.clone()));
     workers.spawn(memory::worker::run(state.clone(), receiver.clone()));
     workers.spawn(orbit_server::communications::sync::run(

@@ -1,0 +1,418 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_search",
+      "description": "查询本人跨渠道待办，字面搜索和分页。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_get",
+      "description": "读取待办、安排、来源、事件与每期实际处理结果。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_create",
+      "description": "按用户明确指令创建待办，可同时添加一次性、周期或回访安排。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "objective": {
+                "type": "string"
+              },
+              "completion_criteria": {
+                "type": "string"
+              },
+              "next_action": {
+                "type": "string"
+              },
+              "waiting_on": {
+                "type": "string"
+              },
+              "due_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "事情截止时间，RFC3339；空值表示无截止时间"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reminder",
+                  "checkin",
+                  "execute"
+                ]
+              },
+              "next_run_at": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "recurrence": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "daily",
+                  "weekdays",
+                  "weekly",
+                  "monthly"
+                ]
+              },
+              "ends_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "missed_policy": {
+                "type": "string",
+                "enum": [
+                  "skip",
+                  "latest"
+                ]
+              },
+              "grace_minutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10080
+              },
+              "instruction": {
+                "type": "string"
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "feishu"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "next_run_at",
+              "timezone",
+              "recurrence",
+              "missed_policy",
+              "grace_minutes",
+              "channel"
+            ],
+            "additionalProperties": false
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_update",
+      "description": "按完整正文和版本更新待办；完成或取消同时停止其所有安排。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "content": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "objective": {
+                "type": "string"
+              },
+              "completion_criteria": {
+                "type": "string"
+              },
+              "next_action": {
+                "type": "string"
+              },
+              "waiting_on": {
+                "type": "string"
+              },
+              "due_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "事情截止时间，RFC3339；空值表示无截止时间"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "waiting_external",
+              "needs_user",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "content",
+          "status",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_schedule",
+      "description": "新增、改期、暂停、结束或恢复待办的定时、周期和主动回访安排。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "todo_version": {
+            "type": "integer"
+          },
+          "schedule_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "paused",
+              "ended"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reminder",
+                  "checkin",
+                  "execute"
+                ]
+              },
+              "next_run_at": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "recurrence": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "daily",
+                  "weekdays",
+                  "weekly",
+                  "monthly"
+                ]
+              },
+              "ends_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "missed_policy": {
+                "type": "string",
+                "enum": [
+                  "skip",
+                  "latest"
+                ]
+              },
+              "grace_minutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10080
+              },
+              "instruction": {
+                "type": "string"
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "feishu"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "next_run_at",
+              "timezone",
+              "recurrence",
+              "missed_policy",
+              "grace_minutes",
+              "channel"
+            ],
+            "additionalProperties": false
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "todo_version",
+          "status",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_link",
+      "description": "关联本人可访问的会话、资料、知识或 Linear issue。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "conversation",
+              "communication",
+              "knowledge",
+              "linear"
+            ]
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "kind",
+          "resource_id",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo_run_complete",
+      "description": "按用户明确说明记录某一期已完成，后续周期保持运行。先读取 todo_get 确认期次。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "version",
+          "note",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+]

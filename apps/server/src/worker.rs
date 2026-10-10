@@ -285,7 +285,7 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
                 sqlx::query("INSERT INTO memory_jobs(run_id,owner,source_seq) SELECT $1,owner,$2 FROM conversations WHERE id=$3 ON CONFLICT DO NOTHING")
                     .bind(job.id).bind(job.seq).bind(job.conversation_id).execute(&mut *tx).await?;
             }
-            sqlx::query("INSERT INTO followup_discovery(run_id,owner) SELECT $1,c.owner FROM conversations c JOIN followup_preferences p ON p.owner=c.owner AND p.enabled WHERE c.id=$2 ON CONFLICT DO NOTHING")
+            sqlx::query("INSERT INTO followup_discovery(run_id,owner) SELECT $1,c.owner FROM conversations c JOIN followup_preferences p ON p.owner=personal_owner(c.owner) AND p.enabled WHERE c.id=$2 ON CONFLICT DO NOTHING")
                 .bind(job.id).bind(job.conversation_id).execute(&mut *tx).await?;
             tx.commit().await?;
             tracing::info!(

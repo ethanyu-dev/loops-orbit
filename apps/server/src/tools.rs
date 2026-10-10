@@ -12,6 +12,8 @@ pub struct Host<'a> {
     followups: std::sync::Arc<followups::tools::Host<'a>>,
     /// 只注册当前身份可用的业务模块。
     registry: agent_runtime::tools::Registry<'a>,
+    /// 本人待办背景与业务工具使用同一身份。
+    todos: Option<std::sync::Arc<crate::todos::tools::Provider<'a>>>,
 }
 impl<'a> Host<'a> {
     /// 业务模块在此注册，运行时不再维护名称分支。
@@ -38,14 +40,35 @@ impl<'a> Host<'a> {
         {
             providers.push(std::sync::Arc::new(linear));
         }
+        let todos = crate::todos::tools::Provider::new(
+            state,
+            job,
+            &followups.owner,
+            followups.inputs.clone(),
+        )
+        .await?
+        .map(std::sync::Arc::new);
+        if let Some(todos) = &todos {
+            providers.push(todos.clone());
+        }
         Ok(Self {
+            todos,
             followups,
             registry: agent_runtime::tools::Registry::new(providers),
         })
     }
     /// 提醒背景独立于工具加载，不主动泄露其他模块资料。
     pub async fn background(&self) -> ApiResult<Option<String>> {
-        self.followups.background().await
+        let mut parts = self
+            .followups
+            .background()
+            .await?
+            .into_iter()
+            .collect::<Vec<_>>();
+        if let Some(todos) = &self.todos {
+            parts.extend(todos.background().await?);
+        }
+        Ok((!parts.is_empty()).then(|| parts.join("\n")))
     }
 }
 impl agent_runtime::tools::Host for Host<'_> {
