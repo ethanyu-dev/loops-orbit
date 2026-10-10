@@ -1,0 +1,51 @@
+[
+  {
+    "name": "todo_search",
+    "provider": "todos",
+    "description": "查询本人跨渠道待办，字面搜索和分页。",
+    "effect": "read",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_get",
+    "provider": "todos",
+    "description": "读取待办、安排、来源、事件与每期实际处理结果。",
+    "effect": "read",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_create",
+    "provider": "todos",
+    "description": "按用户明确指令创建待办，可同时添加一次性、周期或回访安排。",
+    "effect": "write",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_update",
+    "provider": "todos",
+    "description": "按完整正文和版本更新待办；完成或取消同时停止其所有安排。",
+    "effect": "write",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_schedule",
+    "provider": "todos",
+    "description": "新增、改期、暂停、结束或恢复待办的定时、周期和主动回访安排。",
+    "effect": "write",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_link",
+    "provider": "todos",
+    "description": "关联本人可访问的会话、资料、知识或 Linear issue。",
+    "effect": "write",
+    "keywords": "待办 事项 目标 提醒 定时 周期 每天 每周 每月 回访 跟进 todo schedule recurring"
+  },
+  {
+    "name": "todo_run_complete",
+    "provider": "todos",
+    "description": "记录某一期完成并停止该期未发通知，保留后续周期。",
+    "effect": "write",
+    "keywords": "待办 本周 本期 周报 完成 记录 周期"
+  }
+]

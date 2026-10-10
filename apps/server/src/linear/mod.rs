@@ -101,6 +101,38 @@ async fn connection(state: &AppState, owner: &str) -> ApiResult<Option<Connectio
         .filter(|row| row.status == "active"))
 }
 
+/// 只读定时任务记录连接代次和密钥摘要，断开或换号后旧报告不能继续投递。
+pub(crate) async fn todo_revision(state: &AppState) -> ApiResult<Option<String>> {
+    Ok(connection(state, "admin").await?.map(|c| {
+        crate::auth::hash(&format!(
+            "{}:{}",
+            c.generation,
+            c.key_fingerprint.unwrap_or_default()
+        ))
+    }))
+}
+
+/// 待办仅暴露查询白名单，后台身份来自已验证的个人安排，不能执行写操作。
+pub(crate) async fn read_for_todo(
+    state: &AppState,
+    name: &str,
+    args: serde_json::Value,
+) -> ApiResult<serde_json::Value> {
+    if !matches!(
+        name,
+        "linear_issue_list" | "linear_issue_get" | "linear_team_metadata"
+    ) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "todo_read_only"));
+    }
+    let connection = connection(state, "admin")
+        .await?
+        .ok_or(ApiError(StatusCode::CONFLICT, "linear_not_connected"))?;
+    let token = &configured(state)?.api_key;
+    let result = queries::execute(state, &connection, token, name, args).await?;
+    connection::access(state, connection.generation).await?;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

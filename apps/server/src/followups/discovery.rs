@@ -78,7 +78,7 @@ async fn discover(state: &AppState, id: Uuid, owner: &str, attempt: i32) -> anyh
     if inputs.is_empty() {
         return Ok(());
     }
-    let existing:Vec<String>=sqlx::query_scalar("SELECT topic FROM followups WHERE owner=$1 AND status NOT IN('cancelled','expired','failed') ORDER BY updated_at DESC LIMIT 50")
+    let existing:Vec<String>=sqlx::query_scalar("SELECT title FROM todos WHERE owner=personal_owner($1) AND status NOT IN('completed','cancelled') ORDER BY updated_at DESC LIMIT 50")
         .bind(owner).fetch_all(&state.pool).await?;
     let output = state
         .runtime

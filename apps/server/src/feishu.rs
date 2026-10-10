@@ -280,15 +280,22 @@ pub async fn deliver_one(state: &AppState) -> ApiResult<()> {
     };
     // 与取消共用会话锁，保证“已经开始投递”的提示不会漏掉并发 HTTP 起点。
     let mut dispatch = state.pool.begin().await?;
+    if followup.is_some() {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('orbit:todos:admin'))")
+            .execute(&mut *dispatch)
+            .await?;
+    }
     if let Some(job) = &followup {
-        sqlx::query("SELECT id FROM conversations WHERE owner=$1 ORDER BY id FOR UPDATE")
+        sqlx::query("SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($1) ORDER BY id FOR UPDATE")
             .bind(&job.owner)
             .execute(&mut *dispatch)
             .await?;
-        sqlx::query("SELECT owner FROM followup_preferences WHERE owner=$1 FOR UPDATE")
-            .bind(&job.owner)
-            .execute(&mut *dispatch)
-            .await?;
+        sqlx::query(
+            "SELECT owner FROM followup_preferences WHERE owner=personal_owner($1) FOR UPDATE",
+        )
+        .bind(&job.owner)
+        .execute(&mut *dispatch)
+        .await?;
         if !crate::followups::scheduler::can_deliver(state, job, None).await? {
             dispatch.rollback().await?;
             crate::followups::scheduler::prepare_delivery(state, job.id, job.version).await?;
@@ -330,10 +337,12 @@ pub async fn deliver_one(state: &AppState) -> ApiResult<()> {
             .bind(job.conversation_id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("SELECT owner FROM followup_preferences WHERE owner=$1 FOR UPDATE")
-            .bind(&job.owner)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "SELECT owner FROM followup_preferences WHERE owner=personal_owner($1) FOR UPDATE",
+        )
+        .bind(&job.owner)
+        .execute(&mut *tx)
+        .await?;
     }
     let updated = sqlx::query(include_str!("sql/delivery_result.sql"))
         .bind(delivery.id)

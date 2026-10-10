@@ -440,6 +440,14 @@ async fn discovery_from_completed_run() {
     .await
     .unwrap();
     assert_eq!(count, 1);
+    // 本人自动候选先暂停并等待接受，不能将协议夹具的推测直接发给本人。
+    let candidate: (String, String) = sqlx::query_as(
+        "SELECT t.status,s.status FROM todos t JOIN todo_schedules s ON s.todo_id=t.id",
+    )
+    .fetch_one(&h.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(candidate, ("needs_user".into(), "paused".into()));
     sqlx::query("UPDATE followup_discovery SET status='queued',available_at=now() WHERE run_id=$1")
         .bind(run)
         .execute(&h.state.pool)
@@ -448,6 +456,16 @@ async fn discovery_from_completed_run() {
     tasks::discovery::process_one(&h.state).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM followups")
+            .fetch_one(&h.state.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    // 新轮次提到同一事项仍去重，不能只依赖同一发现任务的幂等键。
+    super::memory::complete(&h, &cookie, conv, "我准备尝试新方案").await;
+    tasks::discovery::process_one(&h.state).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM todos")
             .fetch_one(&h.state.pool)
             .await
             .unwrap(),

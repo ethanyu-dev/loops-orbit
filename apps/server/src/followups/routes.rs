@@ -17,7 +17,7 @@ use uuid::Uuid;
 pub async fn index(State(state): State<AppState>, identity: Identity) -> ApiResult<Json<Value>> {
     let preferences = super::preferences(&state, &identity.owner).await?;
     let items: Vec<Followup> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM followups WHERE owner=$1 ORDER BY (status IN('scheduled','checking','queued','sent')) DESC,updated_at DESC LIMIT 200"
+        "SELECT {COLUMNS} FROM followups WHERE personal_owner(owner)=personal_owner($1) ORDER BY (status IN('scheduled','checking','queued','sent')) DESC,updated_at DESC LIMIT 200"
     )))
     .bind(&identity.owner)
     .fetch_all(&state.pool)
@@ -78,9 +78,9 @@ pub async fn notifications(
     State(state): State<AppState>,
     identity: Identity,
 ) -> ApiResult<Json<Value>> {
-    let items:Vec<Notification>=sqlx::query_as("SELECT m.seq AS id,m.conversation_id,m.followup_id,m.content,m.created_at,m.read_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.owner=$1 AND m.kind='followup' ORDER BY (m.read_at IS NULL) DESC,m.seq DESC LIMIT 50")
+    let items:Vec<Notification>=sqlx::query_as("SELECT m.seq AS id,m.conversation_id,m.followup_id,m.content,m.created_at,m.read_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE personal_owner(c.owner)=personal_owner($1) AND m.kind='followup' ORDER BY (m.read_at IS NULL) DESC,m.seq DESC LIMIT 50")
         .bind(&identity.owner).fetch_all(&state.pool).await?;
-    let unread:i64=sqlx::query_scalar("SELECT count(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.owner=$1 AND m.kind='followup' AND m.read_at IS NULL")
+    let unread:i64=sqlx::query_scalar("SELECT count(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE personal_owner(c.owner)=personal_owner($1) AND m.kind='followup' AND m.read_at IS NULL")
         .bind(&identity.owner).fetch_one(&state.pool).await?;
     Ok(Json(json!({"unread":unread,"items":items})))
 }
@@ -90,7 +90,7 @@ pub async fn read(
     identity: Identity,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-    let rows=sqlx::query("UPDATE messages SET read_at=COALESCE(read_at,now()) WHERE seq=$1 AND kind='followup' AND conversation_id IN(SELECT id FROM conversations WHERE owner=$2)")
+    let rows=sqlx::query("UPDATE messages SET read_at=COALESCE(read_at,now()) WHERE seq=$1 AND kind='followup' AND conversation_id IN(SELECT id FROM conversations WHERE personal_owner(owner)=personal_owner($2))")
         .bind(id).bind(&identity.owner).execute(&state.pool).await?;
     if rows.rows_affected() == 0 {
         return Err(ApiError(StatusCode::NOT_FOUND, "notification_not_found"));

@@ -15,7 +15,7 @@ export const PAGE_PATHS: Record<Page, string> = {
   chat: '/chat',
   memory: '/memory',
   knowledge: '/knowledge',
-  followups: '/followups',
+  followups: '/todos',
   communications: '/communications',
   integrations: '/integrations',
   links: '/links',
