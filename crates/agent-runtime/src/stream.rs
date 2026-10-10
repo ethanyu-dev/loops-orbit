@@ -2,8 +2,10 @@ use crate::{Failure, MAX_RESPONSE_BYTES, MAX_TOOL_CALLS, failure};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
+// 单个事件和保留内容各自限长；推理片段只受事件、传输和请求超时限制。
+const MAX_EVENT_BYTES: usize = 1_048_576;
+
 /// 按字节缓存 SSE 行，网络分块可以落在 UTF-8 字符或事件的任意位置。
-#[derive(Default)]
 pub(crate) struct Decoder {
     /// 未出现换行的尾部字节。
     buffer: Vec<u8>,
@@ -19,10 +21,71 @@ pub(crate) struct Decoder {
     done: bool,
     /// 整个响应的有界字节计数。
     received: usize,
+    /// 当前 SSE 事件的原始字节数，包含跨行片段。
+    event_bytes: usize,
+    /// 已解析事件数，用于定位碎片包装开销。
+    events: usize,
+    /// 正文与工具参数累计保留的字节数。
+    retained: usize,
+    /// 配置允许的整条流传输预算。
+    max_transfer: usize,
     /// 在结束事件后仍读取 usage；不保存原始响应或推理正文。
     pub(crate) metadata: crate::response::Metadata,
 }
+impl Default for Decoder {
+    fn default() -> Self {
+        Self::new(crate::DEFAULT_STREAM_MAX_BYTES)
+    }
+}
 impl Decoder {
+    /// 单次响应独立计数；构造预算已经由运行时启动校验。
+    pub(crate) fn new(max_transfer: usize) -> Self {
+        Self {
+            buffer: Vec::new(),
+            data: Vec::new(),
+            content: String::new(),
+            calls: Vec::new(),
+            finished: false,
+            done: false,
+            received: 0,
+            event_bytes: 0,
+            events: 0,
+            retained: 0,
+            max_transfer,
+            metadata: Default::default(),
+        }
+    }
+    /// 只记录大小、事件数与分类，不记录正文、工具参数和推理内容。
+    pub(crate) fn log(&self) {
+        tracing::info!(
+            received_bytes = self.received,
+            retained_bytes = self.retained,
+            events = self.events,
+            transfer_limit = self.max_transfer,
+            "模型流大小统计"
+        );
+    }
+    /// 限制类别和计数帮助区分协议包装开销与真正的内容超限。
+    fn limit(&self, code: &'static str) -> Failure {
+        tracing::warn!(
+            code,
+            received_bytes = self.received,
+            retained_bytes = self.retained,
+            event_bytes = self.event_bytes,
+            events = self.events,
+            "模型流达到限制"
+        );
+        failure(code, false)
+    }
+    /// 在分配累计正文或参数前执行预算检查。
+    fn retain(&mut self, bytes: usize) -> Result<(), Failure> {
+        self.retained += bytes;
+        if self.retained > MAX_RESPONSE_BYTES {
+            return Err(self.limit("provider_stream_content_limit"));
+        }
+        Ok(())
+    }
+
     /// 逐行处理完整事件，不把网络截断误判为成功回复。
     pub(crate) fn push(
         &mut self,
@@ -30,17 +93,29 @@ impl Decoder {
         progress: Option<&watch::Sender<String>>,
     ) -> Result<(), Failure> {
         self.received += bytes.len();
-        if self.received > MAX_RESPONSE_BYTES {
-            return Err(failure("provider_response_too_large", false));
+        if self.received > self.max_transfer {
+            return Err(self.limit("provider_stream_transfer_limit"));
         }
-        self.buffer.extend_from_slice(bytes);
-        while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
-            let line = self.buffer.drain(..=end).collect::<Vec<_>>();
+        // 按行增量拷贝，不能因一个网络块包含许多小事件就误判为大事件。
+        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+            self.event_bytes += part.len();
+            if self.event_bytes > MAX_EVENT_BYTES {
+                return Err(self.limit("provider_stream_event_limit"));
+            }
+            self.buffer.extend_from_slice(part);
+            if !part.ends_with(b"\n") {
+                continue;
+            }
+            let line = std::mem::take(&mut self.buffer);
             let line = std::str::from_utf8(&line)
                 .map_err(|_| failure("provider_invalid_stream", false))?;
             let line = line.trim_end_matches(['\r', '\n']);
             if line.is_empty() {
                 self.event(progress)?;
+                self.event_bytes = 0;
+                if self.done {
+                    break;
+                }
             } else if let Some(data) = line.strip_prefix("data:") {
                 self.data
                     .push(data.strip_prefix(' ').unwrap_or(data).to_owned());
@@ -54,6 +129,7 @@ impl Decoder {
         if self.data.is_empty() {
             return Ok(());
         }
+        self.events += 1;
         let data = std::mem::take(&mut self.data).join("\n");
         if data == "[DONE]" {
             self.finished = true;
@@ -81,6 +157,7 @@ impl Decoder {
         }
         let delta = &choice["delta"];
         if let Some(text) = delta["content"].as_str() {
+            self.retain(text.len())?;
             self.content.push_str(text);
             if let Some(progress) = progress {
                 progress.send_replace(self.content.clone());
@@ -100,6 +177,7 @@ impl Decoder {
                 }
                 for path in ["/id", "/function/name", "/function/arguments"] {
                     if let Some(fragment) = call.pointer(path).and_then(Value::as_str) {
+                        self.retain(fragment.len())?;
                         let target = self.calls[index].pointer_mut(path).unwrap();
                         *target = Value::String(format!("{}{fragment}", target.as_str().unwrap()));
                     }
@@ -170,5 +248,61 @@ mod tests {
             )
             .unwrap();
         assert_eq!(decoder.finish().unwrap_err().code, "provider_output_limit");
+    }
+    // 验证累计包装超过旧 1 MiB 上限时仍接受有界小事件；不代表真实供应商格式或吞吐验收。
+    #[test]
+    fn protocol_overhead_does_not_consume_retained_content_budget() {
+        let event = format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{"reasoning_content":"想".repeat(100)}}]})
+        );
+        let mut decoder = Decoder::default();
+        for _ in 0..4000 {
+            decoder.push(event.as_bytes(), None).unwrap();
+        }
+        assert!(decoder.received > MAX_RESPONSE_BYTES);
+        assert_eq!(decoder.retained, 0);
+        decoder.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", None).unwrap();
+        assert_eq!(decoder.finish().unwrap()["content"], "ok");
+    }
+
+    // 验证单事件跨块/多行、累计内容、工具参数及总流预算各自生效；不通过大内存或无限网络流测试。
+    #[test]
+    fn stream_limits_remain_independent() {
+        let mut decoder = Decoder::default();
+        let half = vec![b'x'; MAX_EVENT_BYTES / 2];
+        decoder.push(&half, None).unwrap();
+        decoder.push(&half, None).unwrap();
+        assert_eq!(
+            decoder.push(b"x", None).unwrap_err().code,
+            "provider_stream_event_limit"
+        );
+        let mut decoder = Decoder::default();
+        let line = format!("data: {}\n", "x".repeat(MAX_EVENT_BYTES / 2));
+        decoder.push(line.as_bytes(), None).unwrap();
+        assert_eq!(
+            decoder.push(line.as_bytes(), None).unwrap_err().code,
+            "provider_stream_event_limit"
+        );
+        for delta in [
+            json!({"content":"x".repeat(600_000)}),
+            json!({"tool_calls":[{"index":0,"function":{"arguments":"x".repeat(600_000)}}]}),
+        ] {
+            let event = format!("data: {}\n\n", json!({"choices":[{"delta":delta}]}));
+            let mut decoder = Decoder::default();
+            decoder.push(event.as_bytes(), None).unwrap();
+            assert_eq!(
+                decoder.push(event.as_bytes(), None).unwrap_err().code,
+                "provider_stream_content_limit"
+            );
+        }
+        let mut decoder = Decoder::new(100);
+        for _ in 0..20 {
+            decoder.push(b": p\n\n", None).unwrap();
+        }
+        assert_eq!(
+            decoder.push(b": p\n\n", None).unwrap_err().code,
+            "provider_stream_transfer_limit"
+        );
     }
 }

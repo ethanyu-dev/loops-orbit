@@ -99,6 +99,7 @@ async fn per_request_whitelist_prevents_hidden_execution() {
         tools_enabled: true,
         stream_enabled: false,
         chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
+        stream_max_bytes: crate::DEFAULT_STREAM_MAX_BYTES,
     })
     .unwrap();
     let host = Fixture {

@@ -1,3 +1,5 @@
+mod delivery_recovery;
+
 use super::*;
 use agent_runtime::tools::Host as _;
 use chrono::{Duration as Delta, Utc};

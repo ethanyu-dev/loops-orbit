@@ -237,6 +237,7 @@ impl Harness {
                 tools_enabled: true,
                 stream_enabled: true,
                 chat_output_tokens: agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS,
+                stream_max_bytes: agent_runtime::DEFAULT_STREAM_MAX_BYTES,
             },
             feishu: Some(FeishuConfig {
                 api_base: format!("http://127.0.0.1:{port}"),

@@ -9,6 +9,32 @@ use serde_json::{Value, json};
 use std::{future::Future, pin::Pin};
 use uuid::Uuid;
 
+// 渠道名称必须作为投递动作的目标出现，不能把“汇总飞书资料”当作切换渠道。
+const CHANNEL_TARGET_PREFIXES: &[&str] = &[
+    "推送到",
+    "推送至",
+    "发送到",
+    "发送至",
+    "发到",
+    "送到",
+    "投递到",
+    "改到",
+    "改成",
+    "改为",
+    "推送的是",
+    "发送的是",
+    "渠道是",
+    "渠道为",
+    "渠道设为",
+    "渠道设置为",
+    "sendto",
+    "deliverto",
+    "switchto",
+    "notifyvia",
+];
+// 保守拒绝含否定的整句；模型必须澄清，不能截短引文绕过。
+const CHANNEL_NEGATIONS: &[&str] = &["不", "别", "取消", "禁止", "not", "never", "don't"];
+
 /// 对话待办工具固定真实入口身份，模型不能替换数据主体或运行租约。
 pub struct Provider<'a> {
     /// 共享存储与权限校验入口。
@@ -21,6 +47,8 @@ pub struct Provider<'a> {
     inputs: Vec<String>,
     /// 创建宿主时的绑定版本。
     version: Option<i64>,
+    /// 当前会话的可信渠道，只用于提示模型；默认值仍由服务端解析。
+    channel: String,
 }
 impl<'a> Provider<'a> {
     /// 仅本人注册待办工具；飞书白名单中的其他用户不会继承。
@@ -39,6 +67,10 @@ impl<'a> Provider<'a> {
             owner: owner.into(),
             inputs,
             version: identity::version(state, owner).await?,
+            channel: sqlx::query_scalar("SELECT channel FROM conversations WHERE id=$1")
+                .bind(job.conversation_id)
+                .fetch_one(&state.pool)
+                .await?,
         }))
     }
     /// 最近事项只作为有界背景，不自动把本轮会话永久绑定到一个猜测的目标。
@@ -80,6 +112,22 @@ impl<'a> Provider<'a> {
         let evidence = args["evidence"].as_str().unwrap_or("");
         if evidence.chars().count() < 2 || !self.inputs.iter().any(|s| s.contains(evidence)) {
             return Err(ApiError(StatusCode::BAD_REQUEST, "todo_evidence_required"));
+        }
+        // 显式渠道必须有独立正向原文依据，防止模型把猜测当作默认值。
+        if matches!(name, "todo_create" | "todo_schedule") {
+            let channel = args["schedule"]["channel"].as_str().unwrap_or("inherit");
+            if channel != "inherit" {
+                let quote = args["channel_evidence"].as_str().unwrap_or("");
+                if !channel_authorized(channel, quote, &self.inputs) {
+                    return Err(ApiError(
+                        StatusCode::BAD_REQUEST,
+                        "todo_channel_evidence_required",
+                    ));
+                }
+            }
+            args.as_object_mut()
+                .expect("证据为对象")
+                .remove("channel_evidence");
         }
         let operation_key = crate::auth::hash(&format!("{name}:{args}"));
         let source = Source {
@@ -135,7 +183,11 @@ fn parse_id(args: &Value) -> ApiResult<Uuid> {
 }
 impl agent_runtime::tools::Host for Provider<'_> {
     fn instructions(&self) -> String {
-        include_str!("../../prompts/todo_tools.md").into()
+        format!(
+            "{}\n当前发起渠道（服务端数据）：{}",
+            include_str!("../../prompts/todo_tools.md"),
+            self.channel
+        )
     }
     fn definitions(&self) -> Vec<Value> {
         serde_json::from_str(include_str!("../../prompts/todo_tools.json"))
@@ -154,5 +206,69 @@ impl agent_runtime::tools::Host for Provider<'_> {
                 .await
                 .unwrap_or_else(|e| json!({"error":e.1}))
         })
+    }
+}
+
+/// 只接受本轮完整分句中的正向渠道依据；不允许截掉否定词后再提交引文。
+fn channel_authorized(channel: &str, quote: &str, inputs: &[String]) -> bool {
+    let quote = quote.trim();
+    let names: &[&str] = match channel {
+        "feishu" => &["飞书", "feishu"],
+        "web" => &["网页", "web"],
+        _ => return false,
+    };
+    !quote.is_empty()
+        && inputs
+            .iter()
+            .flat_map(|input| input.split(['，', ',', '。', '；', ';', '\n']))
+            .map(str::trim)
+            .any(|clause| {
+                let lower = clause.to_lowercase();
+                clause == quote
+                    && positive_target(&lower, names)
+                    && !CHANNEL_NEGATIONS.iter().any(|word| lower.contains(word))
+            })
+}
+
+/// 忽略渠道名两侧空格，但保留动作方向，避免把“从飞书改到网页”的来源误作目标。
+fn positive_target(clause: &str, names: &[&str]) -> bool {
+    let compact: String = clause.chars().filter(|c| !c.is_whitespace()).collect();
+    names.iter().any(|name| {
+        compact.match_indices(name).any(|(index, _)| {
+            let before = &compact[..index];
+            let after = &compact[index + name.len()..];
+            CHANNEL_TARGET_PREFIXES
+                .iter()
+                .any(|prefix| before.ends_with(prefix))
+                || ((before.is_empty()
+                    || ["用", "使用", "通过", "在"]
+                        .iter()
+                        .any(|prefix| before.ends_with(prefix)))
+                    && ["推送", "提醒", "通知", "发送"]
+                        .iter()
+                        .any(|verb| after.starts_with(verb)))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // 验证正向分句、英文渠道和否定截取；不声称覆盖任意自然语言授权语义。
+    #[test]
+    fn explicit_channel_requires_positive_user_clause() {
+        let inputs = vec!["我希望推送的是 feishu， 而不是网页".into()];
+        assert!(channel_authorized(
+            "feishu",
+            "我希望推送的是 feishu",
+            &inputs
+        ));
+        assert!(!channel_authorized("web", "而不是网页", &inputs));
+        assert!(!channel_authorized("web", "网页", &inputs));
+        assert!(!channel_authorized("feishu", "改到飞书", &inputs));
+        let inputs = vec!["从飞书改到网页".into(), "汇总飞书资料".into()];
+        assert!(channel_authorized("web", "从飞书改到网页", &inputs));
+        assert!(!channel_authorized("feishu", "从飞书改到网页", &inputs));
+        assert!(!channel_authorized("feishu", "汇总飞书资料", &inputs));
     }
 }

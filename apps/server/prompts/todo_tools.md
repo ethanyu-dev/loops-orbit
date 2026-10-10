@@ -19,6 +19,8 @@
 - 新安排 next_run_at 必须是未来时间。anchor 固定首次当地钟点；月末按目标月最后一天，夏令时不存在或重复的钟点跳过。
 - missed_policy=latest 在 grace_minutes 宽限内补一次，skip 跳过错过的周期；不能连环补发。ends_at 为空表示周期持续，用户可暂停/结束。
 - 用户要求对某项主动回访可直接建立 checkin，不需要先开启全局自动发现。全局开关控制从后续交流发现候选事项；候选必须由用户接受后才能开始回访。
-- channel 默认使用当前发起渠道，修改时保留读取到的目标；用户要求才切换。网页操作不会自动把飞书投递改成网页。
+- channel 省略或使用 inherit：后端在新建时继承当前发起渠道，修改时保留已有目标。不要猜测渠道，也不要为了保留原渠道而重复填写 web/feishu。
+- 用户明确指定渠道时才传 web/feishu，同时用 channel_evidence 引用本轮包含投递动作及目标渠道的完整正向分句，例如“改到飞书”“推送到网页”“我希望推送的是 feishu”。分句按逗号、句号、分号或换行分隔；不得截掉否定词。无法给出正向依据时请澄清。
+- 回复以工具返回的 schedule.channel、next_run_at、timezone 和 status 为准，不根据发起渠道猜测保存结果。
 - 暂停/结束安排只需 id、schedule_id、todo_version、version、status，不需新的 schedule。恢复或改期必须提供完整 schedule 和未来时间。
 - 工具结果确认保存成功后才承诺已安排。遇到 identity_changed、版本冲突或权限失败，说明实际未完成的动作。

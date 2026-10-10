@@ -30,6 +30,7 @@ fn app() -> Router {
             api_key: "unused".into(),
             stream_enabled: false,
             chat_output_tokens: agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS,
+            stream_max_bytes: agent_runtime::DEFAULT_STREAM_MAX_BYTES,
             tools_enabled: false,
         },
         feishu: None,

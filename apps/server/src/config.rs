@@ -128,6 +128,10 @@ impl Config {
                     .unwrap_or_else(|_| agent_runtime::DEFAULT_CHAT_OUTPUT_TOKENS.to_string())
                     .parse()
                     .context("AGENT_CHAT_OUTPUT_TOKENS 必须是整数")?,
+                stream_max_bytes: env::var("AGENT_STREAM_MAX_BYTES")
+                    .unwrap_or_else(|_| agent_runtime::DEFAULT_STREAM_MAX_BYTES.to_string())
+                    .parse()
+                    .context("AGENT_STREAM_MAX_BYTES 必须是整数")?,
                 stream_enabled: env::var("AGENT_STREAM_ENABLED")
                     .unwrap_or("true".into())
                     .parse()?,

@@ -127,9 +127,10 @@ async fn record(
     key: &str,
     hash: &str,
     result: &Value,
+    source: Option<&Source<'_>>,
 ) -> ApiResult<()> {
-    sqlx::query("INSERT INTO todo_operations(owner,operation_key,request_hash,result) VALUES('admin',$1,$2,$3)")
-        .bind(key).bind(hash).bind(result).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO todo_operations(owner,operation_key,request_hash,result,run_id) VALUES('admin',$1,$2,$3,$4)")
+        .bind(key).bind(hash).bind(result).bind(source.map(|s| s.job.id)).execute(&mut **tx).await?;
     Ok(())
 }
 /// 所有显式修改保留来源，不把自动判断伪装成用户确认。
@@ -188,10 +189,13 @@ pub async fn create(
         .execute(&mut *tx)
         .await?;
     }
-    if let Some(schedule) = &input.schedule {
-        insert_schedule(&mut tx, actor, id, schedule, source).await?;
-    }
-    let result = json!({"id":id,"version":1,"status":"active"});
+    let schedule = if let Some(schedule) = &input.schedule {
+        let schedule_id = insert_schedule(&mut tx, actor, id, schedule, source).await?;
+        Some(super::receipts::schedule_snapshot(&mut tx, schedule_id).await?)
+    } else {
+        None
+    };
+    let result = json!({"id":id,"version":1,"status":"active","schedule":schedule});
     event(
         &mut tx,
         id,
@@ -200,7 +204,7 @@ pub async fn create(
         json!({"content":c,"source_run_id":source.map(|s|s.job.id)}),
     )
     .await?;
-    record(&mut tx, &key, &hash, &result).await?;
+    record(&mut tx, &key, &hash, &result, source).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -246,7 +250,7 @@ pub async fn update(
     event(&mut tx,id,actor,"updated",json!({"version":input.version+1,"status":input.status,"content":c,"source_run_id":source.map(|s|s.job.id)})).await?;
     let result = json!({"id":id,"version":input.version+1,"delivery_may_have_started":started});
     if let Some(key) = key {
-        record(&mut tx, &key, &hash, &result).await?;
+        record(&mut tx, &key, &hash, &result, source).await?;
     }
     tx.commit().await?;
     Ok(result)
@@ -335,6 +339,9 @@ async fn insert_schedule(
     input: &ScheduleInput,
     source: Option<&Source<'_>>,
 ) -> ApiResult<Uuid> {
+    let mut resolved = input.clone();
+    resolved.channel = resolve_channel(tx, &input.channel, source, None).await?;
+    let input = &resolved;
     let due = validate_schedule(input)?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM todo_schedules WHERE todo_id=$1")
         .bind(todo)
@@ -412,8 +419,12 @@ pub async fn schedule(
                 .as_ref()
                 .ok_or(ApiError(StatusCode::BAD_REQUEST, "invalid_todo_schedule"))?;
             let due = validate_schedule(s)?;
-            let (conversation, owner, binding) =
-                destination(&mut tx, actor, &s.channel, source).await?;
+            let channel = resolve_channel(&mut tx, &s.channel, source, Some(id)).await?;
+            let (conversation, owner, binding) = if s.channel == "inherit" {
+                inherited_destination(&mut tx, id).await?
+            } else {
+                destination(&mut tx, actor, &channel, source).await?
+            };
             sqlx::query("UPDATE todo_schedules SET kind=$2,next_run_at=$3,anchor_at=$3,timezone=$4,recurrence=$5,ends_at=$6,missed_policy=$7,grace_minutes=$8,instruction=$9,conversation_id=$10,delivery_owner=$11,binding_version=$12 WHERE id=$1")
                 .bind(id).bind(&s.kind).bind(due).bind(&s.timezone).bind(&s.recurrence).bind(s.ends_at).bind(&s.missed_policy).bind(s.grace_minutes).bind(&s.instruction).bind(conversation).bind(owner).bind(binding).execute(&mut *tx).await?;
         }
@@ -424,7 +435,14 @@ pub async fn schedule(
         .bind(&change.status)
         .execute(&mut *tx)
         .await?;
-        event(&mut tx, todo, actor, "schedule_updated", input.clone()).await?;
+        let mut saved = input.clone();
+        let snapshot = super::receipts::schedule_snapshot(&mut tx, id).await?;
+        if let Some(schedule) = saved["schedule"].as_object_mut() {
+            schedule.extend(snapshot.as_object().expect("安排快照为对象").clone());
+        } else {
+            saved["schedule"] = snapshot;
+        }
+        event(&mut tx, todo, actor, "schedule_updated", saved).await?;
         id
     } else {
         if change.status != "enabled" {
@@ -446,9 +464,9 @@ pub async fn schedule(
         .bind(todo)
         .execute(&mut *tx)
         .await?;
-    let result =
-        json!({"id":id,"todo_version":change.todo_version+1,"delivery_may_have_started":started});
-    record(&mut tx, &key, &hash, &result).await?;
+    let result = json!({"id":id,"todo_version":change.todo_version+1,"delivery_may_have_started":started,
+            "schedule":super::receipts::schedule_snapshot(&mut tx, id).await?});
+    record(&mut tx, &key, &hash, &result, source).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -502,7 +520,7 @@ pub async fn link(
     event(&mut tx, todo, actor, "linked", input.clone()).await?;
     let result = json!({"id":todo,"version":link.version+1});
     if let Some(key) = key {
-        record(&mut tx, &key, &hash, &result).await?;
+        record(&mut tx, &key, &hash, &result, source).await?;
     }
     tx.commit().await?;
     Ok(result)
@@ -555,8 +573,58 @@ pub async fn complete_run(
     .await?;
     let result = json!({"id":change.run_id,"version":change.version+1,"completed":true});
     if let Some(key) = key {
-        record(&mut tx, &key, &hash, &result).await?;
+        record(&mut tx, &key, &hash, &result, source).await?;
     }
     tx.commit().await?;
     Ok(result)
+}
+
+/// 修改时优先已有目标；新建时读取真实会话，网页直接操作默认网页。
+async fn resolve_channel(
+    tx: &mut Transaction<'_, Postgres>,
+    channel: &str,
+    source: Option<&Source<'_>>,
+    schedule: Option<Uuid>,
+) -> ApiResult<String> {
+    if channel != "inherit" {
+        return Ok(channel.into());
+    }
+    if let Some(id) = schedule {
+        return Ok(sqlx::query_scalar("SELECT c.channel FROM todo_schedules s JOIN conversations c ON c.id=s.conversation_id WHERE s.id=$1")
+            .bind(id).fetch_one(&mut **tx).await?);
+    }
+    if let Some(source) = source {
+        return Ok(
+            sqlx::query_scalar("SELECT channel FROM conversations WHERE id=$1")
+                .bind(source.job.conversation_id)
+                .fetch_one(&mut **tx)
+                .await?,
+        );
+    }
+    Ok("web".into())
+}
+
+/// 继承的是完整接收目标而非仅渠道名称，多个绑定账号时不得重新猜选本人。
+async fn inherited_destination(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> ApiResult<(Uuid, String, Option<i64>)> {
+    let target: (Uuid, String, Option<i64>) = sqlx::query_as(
+        "SELECT conversation_id,delivery_owner,binding_version FROM todo_schedules WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if target.1 != "admin" {
+        let binding: Option<i64> = sqlx::query_scalar(
+            "SELECT version FROM personal_identities WHERE owner=$1 AND enabled AND principal='admin' FOR SHARE")
+            .bind(&target.1).fetch_optional(&mut **tx).await?;
+        if binding.is_none() || binding != target.2 {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "todo_feishu_identity_required",
+            ));
+        }
+    }
+    Ok(target)
 }

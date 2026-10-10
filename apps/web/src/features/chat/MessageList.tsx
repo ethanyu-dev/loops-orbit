@@ -89,7 +89,9 @@ export function MessageList({
                         )}
                         {run?.status === 'failed' && (
                           <div className="run-error">
-                            {runError(run.error)}
+                            {run.phase === 'saved_reply_failed'
+                              ? '待办操作已保存，后续回复生成失败。请查看下方提交记录。'
+                              : runError(run.error)}
                             <small>{run?.error}</small>
                           </div>
                         )}
