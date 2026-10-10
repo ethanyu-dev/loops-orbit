@@ -387,3 +387,35 @@ async fn exhausted_step_never_requests_whole_run_replay() {
         2 + CHAT_REQUEST_ATTEMPTS
     );
 }
+
+// 验证代答格式失败仅重新起草一次，不沿用错误散文、不启用工具；夹具不验证模型中文语义或实际外发。
+#[tokio::test]
+async fn takeover_format_recovery_is_bounded_and_has_no_tools() {
+    for valid in [true, false] {
+        let fixture=Fixture::new(vec![
+            answer("stop",json!({"content":"未经结构化的散文"})),
+            answer("stop",json!({"content":if valid {"{\"kind\":\"silence\",\"answer\":null,\"citations\":[]}"} else {"仍然不是 JSON"}})),
+        ],None).await;
+        let result = fixture
+            .runtime
+            .takeover_answer(&json!({"incoming_message":"那这个呢？","evidence":[]}))
+            .await;
+        assert_eq!(result.is_ok(), valid);
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["messages"][1], requests[1]["messages"][1]);
+        assert_eq!(requests[1]["messages"].as_array().unwrap().len(), 3);
+        assert!(
+            requests[1]["messages"][2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("JSON")
+        );
+        assert!(!requests[1].to_string().contains("未经结构化的散文"));
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.get("tools").is_none())
+        );
+    }
+}

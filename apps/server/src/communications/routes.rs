@@ -24,6 +24,10 @@ pub fn router() -> Router<AppState> {
             "/takeover",
             get(super::takeover::read).put(super::takeover::save),
         )
+        .route(
+            "/takeover/sessions/{id}",
+            axum::routing::put(super::takeover::control),
+        )
         .route("/library/days", get(super::library::days))
         .route("/library/files", get(super::library::files))
         .route("/history", post(super::history::batch))

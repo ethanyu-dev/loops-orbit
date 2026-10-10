@@ -305,15 +305,23 @@ impl Runtime {
 
     /// 接管仅起草结构化答案，不继承管理员聊天工具或个人对话上下文。
     pub async fn takeover_answer(&self, input: &Value) -> Result<Value, Failure> {
-        let messages = vec![
+        let mut messages = vec![
             json!({"role":"system","content":conversational_prompt(include_str!("../prompts/takeover_answer.md"))}),
             json!({"role":"user","content":input.to_string()}),
         ];
-        let answer = self
-            .complete_extra(&messages, None, false, Vec::new(), 4096)
-            .await?;
-        serde_json::from_str(answer["content"].as_str().unwrap_or(""))
-            .map_err(|_| failure("invalid_takeover_answer", false))
+        // 仅对结构解析失败重新起草一次；不重放工具、发送或网络故障，不把错误输出当作证据。
+        for attempt in 0..2 {
+            let answer = self
+                .complete_extra(&messages, None, false, Vec::new(), 4096)
+                .await?;
+            if let Ok(value) = serde_json::from_str(answer["content"].as_str().unwrap_or("")) {
+                return Ok(value);
+            }
+            if attempt == 0 {
+                messages.push(json!({"role":"system","content":include_str!("../prompts/takeover_format_retry.md")}));
+            }
+        }
+        Err(failure("invalid_takeover_answer", false))
     }
 
     /// 图片以真正的多模态内容块传入；不把私有资源链接伪装成模型已看过的图片。

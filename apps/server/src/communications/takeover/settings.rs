@@ -72,9 +72,10 @@ pub(crate) async fn read(
     identity.require_admin()?;
     let settings = load(&state).await?;
     let authorized: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM communication_connections WHERE owner='admin' AND status='active' AND send_authorized)").fetch_one(&state.pool).await?;
-    let jobs: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'label',s.label,'question',j.message->>'text','status',j.status,'reason',j.reason,'topic',j.topic,'probability',j.probability,'answer',j.answer,'draft_answer',j.draft_answer,'review_probability',j.review_probability,'decision_threshold',j.decision_threshold,'created_at',j.created_at) FROM communication_takeover_jobs j JOIN communication_sources s ON s.id=j.source_id ORDER BY j.created_at DESC LIMIT 50").fetch_all(&state.pool).await?;
+    let jobs: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',j.id,'source_id',j.source_id,'turn_id',j.turn_id,'turn_revision',j.turn_revision,'inputs',COALESCE(j.context->'pending_messages',turn.inputs),'label',s.label,'question',j.message->>'text','status',j.status,'reason',j.reason,'topic',j.topic,'probability',j.probability,'answer',j.answer,'reply_kind',j.reply_kind,'draft_answer',j.draft_answer,'review_probability',j.review_probability,'decision_threshold',j.decision_threshold,'created_at',j.created_at) FROM communication_takeover_jobs j JOIN communication_sources s ON s.id=j.source_id LEFT JOIN communication_takeover_turns turn ON turn.id=j.turn_id WHERE j.turn_id IS NULL OR j.turn_revision=turn.revision ORDER BY j.created_at DESC LIMIT 50").fetch_all(&state.pool).await?;
+    let sessions: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('source_id',s.source_id,'label',c.label,'mode',s.mode,'version',s.version,'topic',s.topic,'human_until_ms',s.human_until_ms,'updated_at',s.updated_at,'subscribed',c.enabled AND c.subscribed AND NOT c.removal_pending) FROM communication_takeover_sessions s JOIN communication_sources c ON c.id=s.source_id ORDER BY s.updated_at DESC LIMIT 100").fetch_all(&state.pool).await?;
     Ok(Json(
-        json!({"settings":settings,"rules_file":state.config.takeover_questions_file,"configured":state.config.typesafe.is_some(),"authorized":authorized,"jobs":jobs}),
+        json!({"settings":settings,"rules_file":state.config.takeover_questions_file,"configured":state.config.typesafe.is_some(),"authorized":authorized,"jobs":jobs,"sessions":sessions}),
     ))
 }
 /// 管理接口仅保存开关和阈值；问题始终由独立文件管理。

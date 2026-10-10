@@ -43,6 +43,9 @@ pub(super) async fn gather(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Answer {
+    /// 旧起草器未传 kind 时仍按有证据的普通回答解析。
+    #[serde(default)]
+    kind: Option<String>,
     /// 无法最终回答时是 null。
     answer: Option<String>,
     /// 关键结论的逐字出处。
@@ -60,6 +63,9 @@ struct Citation {
 /// 出处字符串匹配只能验证引用存在，语义支持另交 Jev 复核。
 pub(super) fn validate(value: Value, evidence: &[Evidence]) -> Option<String> {
     let output: Answer = serde_json::from_value(value).ok()?;
+    if output.kind.as_deref().is_some_and(|kind| kind != "answer") {
+        return None;
+    }
     let answer = output.answer?.trim().to_owned();
     if answer.is_empty()
         || answer.chars().count() > MAX_ANSWER_CHARS
@@ -74,6 +80,20 @@ pub(super) fn validate(value: Value, evidence: &[Evidence]) -> Option<String> {
                 .iter()
                 .any(|e| e.id == c.id && e.text.contains(&c.quote))
     }) {
+        return None;
+    }
+    Some(answer)
+}
+/// 澄清只允许短问题且不能附伪造证据；是否夹带事实与是否必要由独立复核策略判断。
+pub(super) fn clarification(value: Value) -> Option<String> {
+    let output: Answer = serde_json::from_value(value).ok()?;
+    let answer = output.answer?.trim().to_owned();
+    if output.kind.as_deref() != Some("clarify")
+        || !output.citations.is_empty()
+        || answer.chars().count() > 180
+        || answer.matches(['?', '？']).count() != 1
+        || !(answer.ends_with('?') || answer.ends_with('？'))
+    {
         return None;
     }
     Some(answer)

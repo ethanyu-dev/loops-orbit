@@ -1,5 +1,5 @@
-use super::super::{Source, client, store::Message, sync};
-use super::{AGENT_PREFIX, MAX_AGE_MS, decision, evidence, settings};
+use super::super::{SOURCE_COLUMNS, Source, client, store::Message, sync};
+use super::{AGENT_PREFIX, MAX_AGE_MS, context, decision, evidence, sessions, settings, turns};
 use crate::{
     AppState,
     error::{ApiError, ApiResult},
@@ -31,9 +31,13 @@ struct Job {
     connection_generation: Uuid,
     /// 管理员确认的话题和开关版本。
     settings_version: i64,
+    /// 当前聚合轮次和不可复用的输入版本。
+    turn_id: Uuid,
+    /// 生成、复核及投递必须始终命中该版本。
+    turn_revision: i64,
 }
 /// 只处理新鲜真人文本；本人仅在已绑定的自聊测试中放行，机器人和旧消息仍排除。
-fn eligible(message: &Message, since_ms: i64, now: i64, self_test: bool) -> bool {
+pub(super) fn eligible(message: &Message, since_ms: i64, now: i64, self_test: bool) -> bool {
     (!message.is_me || self_test)
         && !message.deleted
         && message.sender_type == "user"
@@ -53,62 +57,20 @@ fn eligible(message: &Message, since_ms: i64, now: i64, self_test: bool) -> bool
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
-/// 增量页面在资料锁内提交后入队；历史导入不调用此入口，重放依靠唯一键去重。
-pub(crate) async fn enqueue(
-    state: &AppState,
-    source: &Source,
-    connection_version: i64,
-    messages: &[Message],
-) -> ApiResult<()> {
-    if state.config.typesafe.is_none() {
-        return Ok(());
-    }
-    let settings = settings::load(state).await?;
-    if !settings.enabled || settings.rules_error.is_some() {
-        return Ok(());
-    }
-    let connection: Option<(Uuid, String)> = sqlx::query_as("SELECT private_discovery_generation,open_id FROM communication_connections WHERE owner='admin' AND version=$1 AND status='active' AND send_authorized").bind(connection_version).fetch_optional(&state.pool).await?;
-    let Some((generation, open_id)) = connection else {
-        return Ok(());
-    };
-    let self_test = settings.self_test_chat_id.as_deref() == Some(source.chat_id.as_str());
-    let now = Utc::now().timestamp_millis();
-    let own_latest = messages
-        .iter()
-        .filter(|m| m.is_me && !self_test)
-        .map(|m| m.create_time)
-        .max();
-    for message in messages {
-        if message.chat_id == source.chat_id
-            && eligible(
-                message,
-                settings.since_ms,
-                now,
-                self_test && message.sender_id == open_id,
-            )
-            && own_latest.is_none_or(|at| at < message.create_time)
-        {
-            sqlx::query("INSERT INTO communication_takeover_jobs(id,source_id,message_id,source_version,connection_version,connection_generation,settings_version,message) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(source_id,message_id) DO NOTHING")
-                .bind(Uuid::new_v4()).bind(source.id).bind(&message.message_id).bind(source.version).bind(connection_version).bind(generation).bind(settings.version).bind(json!(message)).execute(&state.pool).await?;
-        }
-    }
-    if let Some(at) = own_latest {
-        sqlx::query("UPDATE communication_takeover_jobs SET status='ignored',reason='owner_replied',updated_at=now() WHERE source_id=$1 AND status IN ('queued','evaluating') AND (message->>'create_time')::bigint <= $2")
-            .bind(source.id).bind(at).execute(&state.pool).await?;
-    }
-    Ok(())
-}
 /// 每步只领取一项；崩溃后的未知发送不自动重试，避免重复代表本人发言。
 pub async fn step(state: &AppState) -> ApiResult<()> {
     if state.config.typesafe.is_none() {
         return Ok(());
     }
-    sqlx::query("UPDATE communication_takeover_jobs SET status=CASE WHEN status='dispatching' THEN 'unknown' ELSE 'failed' END,reason='interrupted',updated_at=now() WHERE status IN ('evaluating','dispatching') AND updated_at<now()-interval '3 minutes'").execute(&state.pool).await?;
+    sessions::quarantine(state).await?;
+    sessions::recover_evaluations(state).await?;
     let settings = settings::load(state).await?;
     if !settings.enabled || settings.rules_error.is_some() {
         return Ok(());
     }
-    let job: Option<Job> = sqlx::query_as("UPDATE communication_takeover_jobs SET status='evaluating',updated_at=now() WHERE id=(SELECT id FROM communication_takeover_jobs WHERE status='queued' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,source_id,message,source_version,connection_version,connection_generation,settings_version").fetch_optional(&state.pool).await?;
+    let job: Option<Job> = sqlx::query_as(include_str!("../../sql/takeover_claim.sql"))
+        .fetch_optional(&state.pool)
+        .await?;
     let Some(job) = job else { return Ok(()) };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(JOB_SECONDS),
@@ -120,9 +82,35 @@ pub async fn step(state: &AppState) -> ApiResult<()> {
         Ok(Err(error)) => ("failed", error.1),
         Err(_) => ("failed", "takeover_timeout"),
     };
-    // process 成功发送已经写入 sent；仅更新未终结状态，尊重途中关闭或本人介入。
-    sqlx::query("UPDATE communication_takeover_jobs SET status=CASE WHEN status='dispatching' THEN 'unknown' ELSE $2 END,reason=$3,updated_at=now() WHERE id=$1 AND status IN ('evaluating','dispatching')")
-        .bind(job.id).bind(outcome.0).bind(outcome.1).execute(&state.pool).await?;
+    // 只有当前版本能结束轮次；被补充消息替代的旧工作不能关闭新轮次。
+    let mut tx = state.pool.begin().await?;
+    let exists: Option<Uuid> = sqlx::query_scalar(
+        "SELECT source_id FROM communication_takeover_sessions WHERE source_id=$1 FOR UPDATE",
+    )
+    .bind(job.source_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if exists.is_some() {
+        let status: Option<String> = sqlx::query_scalar("UPDATE communication_takeover_jobs SET status=CASE WHEN status='dispatching' THEN 'unknown' ELSE $2 END,reason=$3,updated_at=now() WHERE id=$1 AND status IN ('evaluating','dispatching') RETURNING status")
+            .bind(job.id).bind(outcome.0).bind(outcome.1).fetch_optional(&mut *tx).await?;
+        if status.as_deref() == Some("ignored")
+            && ["not_matched", "cancelled_by_sender", "conversation_closed"].contains(&outcome.1)
+        {
+            sqlx::query("UPDATE communication_takeover_sessions SET topic=NULL,epoch=$2,version=version+1 WHERE source_id=$1")
+                .bind(job.source_id).bind(Uuid::new_v4()).execute(&mut *tx).await?;
+        }
+        if status.as_deref() == Some("unknown") {
+            sessions::uncertain(&mut tx, job.source_id).await?;
+        }
+        sqlx::query(
+            "UPDATE communication_takeover_turns SET status='closed' WHERE id=$1 AND revision=$2",
+        )
+        .bind(job.turn_id)
+        .bind(job.turn_revision)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 /// 所有判断、生成和证据读取完成后才进入发送阶段。
@@ -146,26 +134,76 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
         .bind(job.id).bind(settings.threshold).execute(&state.pool).await?;
     let topics: Vec<String> =
         serde_json::from_value(settings.topics).map_err(super::super::unavailable)?;
+    let Some(context) = context::snapshot(state, job.turn_id, job.turn_revision).await? else {
+        return Ok("context_unavailable");
+    };
+    if let Some(reason) = context::closure(&context.question) {
+        return Ok(reason);
+    }
+    let mut input = context.input;
     let Some((topic, probability)) =
-        decision::matching(state, &message.text, &topics, settings.threshold).await?
+        decision::matching(state, input.clone(), &topics, settings.threshold).await?
     else {
         return Ok("not_matched");
     };
-    sqlx::query("UPDATE communication_takeover_jobs SET topic=$2,probability=$3 WHERE id=$1 AND status='evaluating'").bind(job.id).bind(&topic).bind(probability).execute(&state.pool).await?;
-    let evidence = evidence::gather(state, &message.text, &topic).await?;
-    if evidence.is_empty() {
-        return Ok("no_evidence");
+    let mut clarified = context.clarified;
+    // 换话题后丢弃旧话题正文；匹配阶段可用旧上下文判断指代，起草只接收当前话题。
+    if input["previous_topic"]
+        .as_str()
+        .is_some_and(|previous| previous != topic)
+    {
+        input["history"] = json!([]);
+        input["clarification_allowed"] = json!(true);
+        clarified = false;
     }
-    let mut input =
-        json!({"incoming_message":message.text,"allowed_topic":topic,"evidence":evidence});
+    sqlx::query("UPDATE communication_takeover_jobs SET topic=$2,probability=$3 WHERE id=$1 AND status='evaluating'").bind(job.id).bind(&topic).bind(probability).execute(&state.pool).await?;
+    let evidence = evidence::gather(state, &context.question, &topic).await?;
+    input["allowed_topic"] = json!(topic);
+    input["evidence"] = json!(evidence);
+    // 仅保存对话快照，不重复保存可被撤回的知识正文。
+    let mut saved_context = input.clone();
+    saved_context
+        .as_object_mut()
+        .expect("上下文对象")
+        .remove("evidence");
+    sqlx::query(
+        "UPDATE communication_takeover_jobs SET context=$2 WHERE id=$1 AND status='evaluating'",
+    )
+    .bind(job.id)
+    .bind(&saved_context)
+    .execute(&state.pool)
+    .await?;
     let generated = state
         .runtime
         .takeover_answer(&input)
         .await
         .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "takeover_answer_unavailable"))?;
-    let Some(answer) = evidence::validate(generated, &evidence) else {
-        return Ok("unanswerable");
+    let kind = generated["kind"].as_str().unwrap_or("answer").to_owned();
+    let answer = if kind == "clarify" {
+        if clarified {
+            return Ok("clarification_limit");
+        }
+        evidence::clarification(generated)
+    } else if kind == "answer" {
+        evidence::validate(generated, &evidence)
+    } else {
+        None
     };
+    let Some(answer) = answer else {
+        return Ok(if evidence.is_empty() {
+            "no_evidence"
+        } else {
+            "unanswerable"
+        });
+    };
+    input["reply_kind"] = json!(kind);
+    sqlx::query(
+        "UPDATE communication_takeover_jobs SET reply_kind=$2 WHERE id=$1 AND status='evaluating'",
+    )
+    .bind(job.id)
+    .bind(&kind)
+    .execute(&state.pool)
+    .await?;
     // 草稿在复核前单独保存；即使低分或复核故障，也不冒充已进入投递阶段的 answer。
     let saved = sqlx::query("UPDATE communication_takeover_jobs SET draft_answer=$2 WHERE id=$1 AND status='evaluating'")
         .bind(job.id).bind(&answer).execute(&state.pool).await?;
@@ -187,12 +225,29 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
         sqlx::query_scalar("SELECT open_id FROM communication_connections WHERE owner='admin'")
             .fetch_one(&state.pool)
             .await?;
-    if !fresh_remote(state, &message, &open_id, &token).await? {
+    if !fresh_remote(state, job, &message, &open_id, &token).await? {
         return Ok("conversation_changed");
+    }
+    // 文件检查在锁设置行之前完成，避免在另一个连接上重复取得同一行锁。
+    if settings::load(state).await?.version != job.settings_version {
+        return Ok("scope_changed");
     }
     // 发送期间与关闭、遗忘、资料修正串行；网络请求受 client 的五秒上限约束。
     let _communication = state.communications.lock().await;
-    if !active(state, job).await?
+    let mut send_tx = state.pool.begin().await?;
+    let exists: Option<Uuid> = sqlx::query_scalar(
+        "SELECT source_id FROM communication_takeover_sessions WHERE source_id=$1 FOR UPDATE",
+    )
+    .bind(job.source_id)
+    .fetch_optional(&mut *send_tx)
+    .await?;
+    if exists.is_none() {
+        return Ok("scope_changed");
+    }
+    // 发送的有限网络窗口内也锁住授权、订阅及设置行，覆盖多个服务进程的修改。
+    sqlx::query("SELECT s.id FROM communication_sources s JOIN communication_connections c ON c.owner=s.owner JOIN communication_takeover_settings t ON t.owner=c.owner WHERE s.id=$1 FOR SHARE OF s,c,t")
+        .bind(job.source_id).execute(&mut *send_tx).await?;
+    if !active_snapshot(state, job).await?
         || !evidence::current(state, &evidence).await?
         || Utc::now().timestamp_millis() - message.create_time > MAX_AGE_MS
     {
@@ -224,11 +279,22 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<&'static str> {
     .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "communication_provider_rejected"))?;
     let sent_id = client::string(&sent["data"], "message_id")?;
     sqlx::query("UPDATE communication_takeover_jobs SET status='sent',sent_message_id=$2,reason=NULL,updated_at=now() WHERE id=$1 AND status='dispatching'").bind(job.id).bind(sent_id).execute(&state.pool).await?;
+    sqlx::query("UPDATE communication_takeover_sessions SET last_sent_at=now(),topic=$2,version=version+1,updated_at=now() WHERE source_id=$1")
+        .bind(job.source_id).bind(&topic).execute(&mut *send_tx).await?;
+    sqlx::query(
+        "UPDATE communication_takeover_turns SET status='closed' WHERE id=$1 AND revision=$2",
+    )
+    .bind(job.turn_id)
+    .bind(job.turn_revision)
+    .execute(&mut *send_tx)
+    .await?;
+    send_tx.commit().await?;
     Ok("sent")
 }
-/// 本人或对方的新输入优先于旧答案；分页无法覆盖原消息时保守静默。
+/// 发送前回采最新消息进入同一轮次；出现补充、编辑或本人发言时，旧版本围栏立即失效。
 async fn fresh_remote(
     state: &AppState,
+    job: &Job,
     message: &Message,
     open_id: &str,
     token: &str,
@@ -244,23 +310,39 @@ async fn fresh_remote(
         .as_array()
         .filter(|items| items.len() <= 20)
         .ok_or_else(|| super::super::unavailable("缺少最新消息"))?;
-    let mut found = false;
-    for item in items {
-        let current = sync::normalize(item, &message.chat_id, open_id)?;
-        if current.message_id == message.message_id {
-            found = !current.deleted
-                && current.text == message.text
-                && current.sender_id == message.sender_id
-                && current.update_time == message.update_time
-                && current.create_time == message.create_time
-                && current.message_type == "text"
-                && current.sender_type == "user"
-                && current.sender_id_type == "open_id";
-        } else if current.create_time >= message.create_time && current.sender_type == "user" {
-            return Ok(false);
-        }
+    let messages: Vec<Message> = items
+        .iter()
+        .map(|item| sync::normalize(item, &message.chat_id, open_id))
+        .collect::<ApiResult<_>>()?;
+    let inputs: Value =
+        sqlx::query_scalar("SELECT inputs FROM communication_takeover_turns WHERE id=$1")
+            .bind(job.turn_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .unwrap_or(json!([]));
+    let unchanged = inputs.as_array().is_some_and(|inputs| {
+        !inputs.is_empty()
+            && inputs.iter().all(|original| {
+                messages
+                    .iter()
+                    .any(|current| turns::same_input(original, &json!(current)))
+            })
+    });
+    let _guard = state.communications.lock().await;
+    let sql = format!(
+        "SELECT {SOURCE_COLUMNS} FROM communication_sources WHERE id=$1 AND version=$2 AND enabled AND subscribed AND NOT removal_pending"
+    );
+    let source: Option<Source> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(job.source_id)
+        .bind(job.source_version)
+        .fetch_optional(&state.pool)
+        .await?;
+    if let Some(source) = source {
+        turns::enqueue(state, &source, job.connection_version, &messages).await?;
+    } else {
+        return Ok(false);
     }
-    Ok(found)
+    Ok(unchanged && active(state, job).await?)
 }
 /// 发送资格始终来自数据库真实身份和订阅，不允许消息文本选择账号或目标会话。
 async fn active(state: &AppState, job: &Job) -> ApiResult<bool> {
@@ -269,6 +351,10 @@ async fn active(state: &AppState, job: &Job) -> ApiResult<bool> {
     if settings.rules_error.is_some() || settings.version != job.settings_version {
         return Ok(false);
     }
+    active_snapshot(state, job).await
+}
+/// 已持有授权和设置行锁时只读围栏，不能再次获取设置排他锁。
+async fn active_snapshot(state: &AppState, job: &Job) -> ApiResult<bool> {
     Ok(
         sqlx::query_scalar(include_str!("../../sql/takeover_active.sql"))
             .bind(job.id)

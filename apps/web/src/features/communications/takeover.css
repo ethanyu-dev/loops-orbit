@@ -49,3 +49,95 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.takeover-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.takeover-sessions {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.takeover-sessions > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.takeover-sessions > li.selected {
+  background: var(--surface-muted, #f5f7fa);
+  border-radius: 8px;
+}
+.takeover-session-select {
+  flex: 1;
+  min-width: 160px;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+.takeover-session-select small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.takeover-session-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.takeover-mode {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-muted, #eef2f7);
+  white-space: nowrap;
+}
+.takeover-mode.uncertain {
+  background: #fff0d5;
+  color: #855400;
+}
+.takeover-session-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.takeover-jobs li > .takeover-inputs {
+  display: grid;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+.takeover-inputs p {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  .takeover-section-title {
+    flex-wrap: wrap;
+  }
+  .takeover-session-controls {
+    width: 100%;
+  }
+}
+.takeover-settings > summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-weight: 600;
+}
+.takeover-settings > summary span {
+  font-size: 12px;
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.takeover-settings[open] > summary {
+  margin-bottom: 12px;
+}
