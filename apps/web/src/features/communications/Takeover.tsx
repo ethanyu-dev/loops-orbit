@@ -1,9 +1,21 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, errorText } from '../../api';
 import './takeover.css';
+import { TakeoverSessions, type TakeoverSession } from './TakeoverSessions';
 
 // 处理原因由服务端枚举映射，不向界面展示供应商响应或凭证。
 const REASONS: Record<string, string> = {
+  superseded: '已并入补充后的新轮次',
+  session_controlled: '你已更改会话接管状态',
+  delivery_uncertain: '前次发送待核对，自动回复已暂停',
+  input_recalled: '当前输入已撤回或不再是文字问题',
+  history_changed: '历史消息已变化，旧上下文已清除',
+  episode_expired: '这段对话已结束',
+  context_unavailable: '本轮输入过长或上下文已经失效',
+  cancelled_by_sender: '对方已取消',
+  conversation_closed: '对方已结束本轮对话',
+  clarification_limit: '已澄清一次，等待明确问题',
+  conversation_upgrade: '会话功能升级，旧任务已取消',
   not_matched: '未明确匹配单一问题',
   no_evidence: '没有找到已发布的通用知识',
   unanswerable: '无法形成有依据的完整回答',
@@ -20,7 +32,7 @@ const REASONS: Record<string, string> = {
   takeover_timeout: '处理超时',
 };
 const STATUS: Record<string, string> = {
-  queued: '等待判断',
+  queued: '等待补充或发送间隔',
   evaluating: '正在判断',
   dispatching: '正在发送',
   sent: '已回复',
@@ -31,6 +43,8 @@ const STATUS: Record<string, string> = {
 
 /** 管理员设置与最近处理记录；不包含用户令牌或模型密钥。 */
 interface Snapshot {
+  /** 每段私聊的人工控制状态。 */
+  sessions: TakeoverSession[];
   /** 服务端已配置 Jev。 */
   configured: boolean;
   /** 当前用户令牌具有发送权限。 */
@@ -58,6 +72,10 @@ interface Snapshot {
   jobs: {
     /** 处理记录的稳定标识。 */
     id: string;
+    /** 所属私聊，用于会话过滤。 */
+    source_id: string;
+    /** 这一轮合并的全部问题。 */
+    inputs: { message_id: string; text: string }[] | null;
     /** 联系人或私聊显示名称。 */
     label: string;
     /** 本次参与判断的原问题，仅管理员可查看。 */
@@ -94,6 +112,7 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
   /** 显式载入编辑版本，避免后台刷新覆盖未保存内容。 */
   async function load() {
     try {
@@ -159,156 +178,185 @@ export function Takeover({ report }: { report: (e: unknown) => void }) {
     );
   return (
     <div className="takeover-workspace">
-      <form
-        className="settings-card takeover-form"
-        onSubmit={(event) => void save(event)}
-        onChange={() => setSaved(false)}
-      >
-        <h2>特定问题自动接管</h2>
-        <p>
-          仅处理已订阅私聊的新文字消息。Jev
-          判断是否属于你允许的问题，现有模型仅使用你已发布的通用知识回答，不读取私人记忆或其他会话原文。无法完整回答时保持静默，每条回复固定带有{' '}
-          <strong>[Agent 自动回复]</strong> 标识。
-        </p>
-        <p>
-          接管期间以约 15
-          秒一轮为轮询目标，实际延迟受会话数量及接口耗时影响。每条新消息重新判断；你已回复或对话发生变化时停止旧答案。超过
-          5 分钟的消息不再自动补发。
-        </p>
-        {!data.configured && (
-          <p role="status">尚未配置 Jev 服务，请在服务端设置 TYPESAFE_API_KEY。</p>
-        )}
-        {!data.authorized && (
-          <p role="status">尚未确认用户发送授权，请使用上方“重新授权”连接飞书。</p>
-        )}
-        {error && <p role="alert">{error}</p>}
-        <label className="takeover-toggle">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={
-              busy ||
-              ((!data.configured || !data.authorized || !!data.settings.rules_error) && !enabled)
-            }
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          允许 agent 以我的身份回复匹配的问题
-        </label>
-        <label className="takeover-toggle">
-          <input
-            type="checkbox"
-            checked={selfTest}
-            disabled={busy || !enabled}
-            onChange={(e) => setSelfTest(e.target.checked)}
-          />
-          自聊测试：将我发给自己的问题按他人询问处理
-        </label>
-        <p>
-          首次开启或关闭后重新开启并保存，会以你的身份向自己发送一条测试提示，并订阅这段自聊的新消息。
-          保存成功后，在飞书打开自己的聊天，发送下方允许的问题即可测试。仅使用已发布的通用知识，保留同样的话题判断、回答复核和回复频率限制。
-          你发给其他联系人的消息不会触发测试；关闭测试不会删除已采集资料。
-        </p>
-        <section className="takeover-rules" aria-label="允许接管的问题">
-          <h3>允许接管的问题</h3>
+      <TakeoverSessions
+        sessions={data.sessions ?? []}
+        selected={selected}
+        onSelect={setSelected}
+        onChange={async () => setData(await api<Snapshot>('/communications/takeover'))}
+        report={report}
+      />
+      <details className="takeover-settings">
+        <summary>
+          自动代答设置 <span>{data.settings.enabled ? '已开启' : '已关闭'}</span>
+        </summary>
+        <form
+          className="settings-card takeover-form"
+          onSubmit={(event) => void save(event)}
+          onChange={() => setSaved(false)}
+        >
+          <h2>自动代答</h2>
           <p>
-            在文件 <code>{data.rules_file}</code> 中维护，最多 20
-            条。文件变更后自动读取，旧任务会取消。
+            仅处理已订阅私聊的新文字消息。Jev
+            判断是否属于你允许的问题，现有模型仅使用你已发布的通用知识回答，不读取私人记忆或其他会话原文。指代不清时最多澄清一次，缺少知识时保持静默。每条回复固定带有{' '}
+            <strong>[Agent 自动回复]</strong> 标识。
           </p>
-          {data.settings.rules_error ? (
-            <p role="alert">
-              {errorText(new ApiError(409, data.settings.rules_error))}{' '}
-              接管已暂停，修复文件后自动恢复，只处理新的消息。
+          <p>
+            接管期间以约 15 秒一轮为轮询目标，实际延迟受会话数量及接口耗时影响。连续消息在采集后合并
+            3 秒，最多等待 10 秒；回复间隔至少 5 秒。 你发言后暂停代答，双方 30
+            分钟没有发言才自动恢复。超过 5 分钟的消息不再补发。
+          </p>
+          {!data.configured && (
+            <p role="status">尚未配置 Jev 服务，请在服务端设置 TYPESAFE_API_KEY。</p>
+          )}
+          {!data.authorized && (
+            <p role="status">尚未确认用户发送授权，请使用上方“重新授权”连接飞书。</p>
+          )}
+          {error && <p role="alert">{error}</p>}
+          <label className="takeover-toggle">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={
+                busy ||
+                ((!data.configured || !data.authorized || !!data.settings.rules_error) && !enabled)
+              }
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            允许 agent 以我的身份回复匹配的问题
+          </label>
+          <label className="takeover-toggle">
+            <input
+              type="checkbox"
+              checked={selfTest}
+              disabled={busy || !enabled}
+              onChange={(e) => setSelfTest(e.target.checked)}
+            />
+            自聊测试：将我发给自己的问题按他人询问处理
+          </label>
+          <p>
+            首次开启或关闭后重新开启并保存，会以你的身份向自己发送一条测试提示，并订阅这段自聊的新消息。
+            保存成功后，在飞书打开自己的聊天，发送下方允许的问题即可测试。仅使用已发布的通用知识，保留同样的话题判断、回答复核和回复频率限制。
+            你发给其他联系人的消息不会触发测试；关闭测试不会删除已采集资料。
+          </p>
+          <section className="takeover-rules" aria-label="允许接管的问题">
+            <h3>允许接管的问题</h3>
+            <p>
+              在文件 <code>{data.rules_file}</code> 中维护，最多 20
+              条。文件变更后自动读取，旧任务会取消。
             </p>
-          ) : (
-            <ol>
-              {data.settings.topics.map((topic) => (
-                <li key={topic}>{topic}</li>
-              ))}
-            </ol>
-          )}
-          {(version !== data.settings.version ||
-            rulesRevision !== data.settings.rules_revision) && (
-            <p role="status">问题或设置已变化，请重新载入后再保存。</p>
-          )}
-        </section>
-        <label>
-          接管及回答复核阈值
-          <input
-            type="number"
-            min="0.5"
-            max="1"
-            step="0.01"
-            value={threshold}
-            onChange={(e) => setThreshold(e.target.value)}
-            required
-          />
-        </label>
-        <p>
-          阈值是 Jev 对判断为真的概率估计。默认 0.90；应结合实际命中记录调整，不能视为准确率保证。
-        </p>
-        <div className="takeover-actions">
-          <button className="primary-button" disabled={busy}>
-            {busy ? '正在保存…' : '保存设置'}
-          </button>
-          <button type="button" disabled={busy} onClick={() => void load()}>
-            重新载入
-          </button>
-          {saved && <span role="status">已保存</span>}
-        </div>
-      </form>
+            {data.settings.rules_error ? (
+              <p role="alert">
+                {errorText(new ApiError(409, data.settings.rules_error))}{' '}
+                接管已暂停，修复文件后自动恢复，只处理新的消息。
+              </p>
+            ) : (
+              <ol>
+                {data.settings.topics.map((topic) => (
+                  <li key={topic}>{topic}</li>
+                ))}
+              </ol>
+            )}
+            {(version !== data.settings.version ||
+              rulesRevision !== data.settings.rules_revision) && (
+              <p role="status">问题或设置已变化，请重新载入后再保存。</p>
+            )}
+          </section>
+          <label>
+            接管及回答复核阈值
+            <input
+              type="number"
+              min="0.5"
+              max="1"
+              step="0.01"
+              value={threshold}
+              onChange={(e) => setThreshold(e.target.value)}
+              required
+            />
+          </label>
+          <p>
+            阈值是 Jev 对判断为真的概率估计。默认 0.90；应结合实际命中记录调整，不能视为准确率保证。
+          </p>
+          <div className="takeover-actions">
+            <button className="primary-button" disabled={busy}>
+              {busy ? '正在保存…' : '保存设置'}
+            </button>
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              重新载入
+            </button>
+            {saved && <span role="status">已保存</span>}
+          </div>
+        </form>
+      </details>
       <section className="settings-card">
-        <h2>最近处理记录</h2>
-        {data.jobs.length === 0 ? (
+        <div className="takeover-section-title">
+          <h2>{selected ? '会话处理记录' : '最近处理记录'}</h2>
+          {selected && <button onClick={() => setSelected(null)}>查看全部</button>}
+        </div>
+        {data.jobs.filter((job) => !selected || job.source_id === selected).length === 0 ? (
           <p>还没有处理记录。开启后只处理新的私聊问题。</p>
         ) : (
           <ul className="takeover-jobs">
-            {data.jobs.map((job) => (
-              <li key={job.id}>
-                <div>
-                  <strong>{job.label}</strong>
-                  <span>{STATUS[job.status] || job.status}</span>
-                </div>
-                <small>
-                  {new Date(job.created_at).toLocaleString()}
-                  {job.topic ? ` · ${job.topic}` : ''}
-                  {job.probability !== null
-                    ? ` · 匹配概率 ${(job.probability * 100).toFixed(1)}%`
-                    : ''}
-                </small>
-                <p className="takeover-answer">{job.question}</p>
-                {job.decision_threshold != null && (
-                  <p>
-                    回答复核：
-                    {job.review_probability != null
-                      ? `${(job.review_probability * 100).toFixed(1)}%`
-                      : '未取得分数'}
-                    {' · '}本次阈值 {(job.decision_threshold * 100).toFixed(1)}%
-                  </p>
-                )}
-                {job.reason && <p>{REASONS[job.reason] || '处理未完成，请检查连接与服务配置。'}</p>}
-                {job.draft_answer && (
-                  <details>
-                    <summary>查看生成草稿（不代表已发送）</summary>
-                    <p className="takeover-answer">{job.draft_answer}</p>
-                  </details>
-                )}
-                {job.reason === 'answer_not_supported' && (
-                  <p>复核分数未达到本次阈值；模型未提供具体拒绝理由。</p>
-                )}
-                {job.decision_threshold == null && job.reason === 'answer_not_supported' && (
-                  <p>历史记录未保存草稿和复核分数，无法还原。</p>
-                )}
-                {job.answer && (
+            {data.jobs
+              .filter((job) => !selected || job.source_id === selected)
+              .map((job) => (
+                <li key={job.id}>
                   <div>
-                    <strong>
-                      {job.status === 'sent' ? '已发送正文' : '投递正文（请结合发送状态核对）'}
-                    </strong>
-                    <p className="takeover-answer">{job.answer}</p>
+                    <strong>{job.label}</strong>
+                    <span>{STATUS[job.status] || job.status}</span>
                   </div>
-                )}
-                {job.status === 'unknown' && <p>请在飞书核对是否已发出；系统不会自动重发。</p>}
-              </li>
-            ))}
+                  <small>
+                    {new Date(job.created_at).toLocaleString()}
+                    {job.topic ? ` · ${job.topic}` : ''}
+                    {job.probability !== null
+                      ? ` · 匹配概率 ${(job.probability * 100).toFixed(1)}%`
+                      : ''}
+                  </small>
+                  {job.inputs?.length ? (
+                    <div className="takeover-inputs" aria-label="本轮问题">
+                      {job.inputs.map((input) => (
+                        <p className="takeover-answer" key={input.message_id}>
+                          {input.text}
+                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="takeover-answer">{job.question || '正文已随来源清除'}</p>
+                  )}
+                  {job.decision_threshold != null && (
+                    <p>
+                      回答复核：
+                      {job.review_probability != null
+                        ? `${(job.review_probability * 100).toFixed(1)}%`
+                        : '未取得分数'}
+                      {' · '}本次阈值 {(job.decision_threshold * 100).toFixed(1)}%
+                    </p>
+                  )}
+                  {job.reason && (
+                    <p>{REASONS[job.reason] || '处理未完成，请检查连接与服务配置。'}</p>
+                  )}
+                  {job.draft_answer && (
+                    <details>
+                      <summary>查看生成草稿（不代表已发送）</summary>
+                      <p className="takeover-answer">{job.draft_answer}</p>
+                    </details>
+                  )}
+                  {job.reason === 'answer_not_supported' && (
+                    <p>复核分数未达到本次阈值；模型未提供具体拒绝理由。</p>
+                  )}
+                  {job.decision_threshold == null && job.reason === 'answer_not_supported' && (
+                    <p>历史记录未保存草稿和复核分数，无法还原。</p>
+                  )}
+                  {job.answer && (
+                    <div>
+                      <strong>
+                        {job.status === 'sent' ? '已发送正文' : '投递正文（请结合发送状态核对）'}
+                      </strong>
+                      <p className="takeover-answer">{job.answer}</p>
+                    </div>
+                  )}
+                  {job.status === 'unknown' && <p>请在飞书核对是否已发出；系统不会自动重发。</p>}
+                </li>
+              ))}
           </ul>
         )}
       </section>

@@ -1,3 +1,4 @@
+mod conversations;
 mod diagnostics;
 
 use super::*;
@@ -7,6 +8,12 @@ use orbit_server::communications::takeover;
 struct TakeoverFixture {
     /// 被采集的原始消息。
     message: Value,
+    /// 同一私聊的连续补充消息。
+    messages: Vec<Value>,
+    /// 捕获起草模型输入，验证轮次与历史。
+    drafts: Vec<Value>,
+    /// 夹具指定澄清分支，不代表真实语义验收。
+    clarify: bool,
     /// 模拟向本人发送提示返回的会话，不依赖会话名称或消息发送者猜测。
     self_chat_id: String,
     /// 验证绑定时拒绝应用身份响应。
@@ -46,6 +53,9 @@ async fn setup_takeover() -> (
     let at = chrono::Utc::now().timestamp_millis() - 4000;
     let fixture = Arc::new(Mutex::new(TakeoverFixture {
         message: json!({"message_id":"om_question","chat_id":"oc_fixture","sender":{"id":"ou_other","id_type":"open_id","sender_type":"user"},"create_time":at.to_string(),"update_time":at.to_string(),"msg_type":"text","body":{"content":json!({"text":"怎么申请 novita 测试环境权限？"}).to_string()}}),
+        messages: vec![],
+        drafts: vec![],
+        clarify: false,
         self_chat_id: "oc_fixture".into(),
         self_chat_bot_sender: false,
         bindings: vec![],
@@ -73,11 +83,12 @@ async fn setup_takeover() -> (
             assert_eq!(headers["authorization"],"Bearer fixture-personal-token");
             let f=f.lock().unwrap();
             let mut items=vec![f.message.clone()];
+            items.extend(f.messages.clone());
             if f.communication_knowledge {
                 let mut knowledge = f.message.clone();
                 knowledge["message_id"] = json!("om_knowledge");
                 knowledge["sender"]["id"] = json!("ou_allowed");
-                let at = f.message["create_time"].as_str().unwrap().parse::<i64>().unwrap() - 1000;
+                let at = f.message["create_time"].as_str().unwrap().parse::<i64>().unwrap() - 60_000;
                 knowledge["create_time"] = json!(at.to_string());
                 knowledge["update_time"] = json!(at.to_string());
                 knowledge["body"]["content"] = json!(json!({"text":"申请 novita 测试环境权限：提交申请表，填写测试用途，由环境管理员审核。"}).to_string());
@@ -96,10 +107,10 @@ async fn setup_takeover() -> (
             f.bindings.push(body);
             Json(json!({"code":0,"data":{"message_id":"om_binding","chat_id":f.self_chat_id,"sender":{"id":"ou_allowed","id_type":"open_id","sender_type":if f.self_chat_bot_sender {"app"} else {"user"}}}}))
         }))
-        .route("/im/v1/messages/om_question/reply",post(|State(f):State<Arc<Mutex<TakeoverFixture>>>,headers:HeaderMap,Json(body):Json<Value>|async move {
+        .route("/im/v1/messages/{message_id}/reply",post(|State(f):State<Arc<Mutex<TakeoverFixture>>>,headers:HeaderMap,Json(body):Json<Value>|async move {
             assert_eq!(headers["authorization"],"Bearer fixture-personal-token");
             let mut f=f.lock().unwrap();f.sent.push(body);
-            Json(json!({"code":if f.reject_send {999} else {0},"data":{"message_id":"om_agent_reply"}}))
+            Json(json!({"code":if f.reject_send {999} else {0},"data":{"message_id":if f.sent.len()==1 {"om_agent_reply".to_owned()} else {format!("om_agent_reply_{}",f.sent.len())}}}))
         }))
         .route("/v1/systemone",post(|State(f):State<Arc<Mutex<TakeoverFixture>>>,headers:HeaderMap,Json(body):Json<Value>|async move {
             assert_eq!(headers["authorization"],"Bearer fixture-typesafe-key");assert_eq!(body["model"],"jev-latest");
@@ -118,11 +129,12 @@ async fn setup_takeover() -> (
             assert!(body.get("tools").is_none());
             assert!(body["messages"][0]["content"].as_str().unwrap().contains("知识问答起草器"));
             let input:Value=serde_json::from_str(body["messages"][1]["content"].as_str().unwrap()).unwrap();
+            f.lock().unwrap().drafts.push(input.clone());
             let evidence=input["evidence"].as_array().unwrap().iter().find(|e|e["text"].as_str().unwrap().contains("提交申请表"));
-            let answer = match evidence.filter(|_| !f.lock().unwrap().unanswerable) {
+            let answer = if f.lock().unwrap().clarify { json!({"kind":"clarify","answer":"你说的是测试环境，还是生产环境？","citations":[]}) } else { match evidence.filter(|_| !f.lock().unwrap().unanswerable) {
                 Some(evidence) => json!({"answer":"请提交申请表，填写测试用途，由环境管理员审核。","citations":[{"id":evidence["id"],"quote":"提交申请表，填写测试用途"}]}),
                 None => json!({"answer":null,"citations":[]}),
-            };
+            }};
             Json(json!({"choices":[{"message":{"content":answer.to_string()}}]}))
         })).with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -202,7 +214,7 @@ async fn takeover_sends_once_as_user_with_agent_marker() {
     knowledge(&h, &cookie).await;
     enable(&h, &cookie).await;
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     let status: String = sqlx::query_scalar("SELECT status FROM communication_takeover_jobs")
         .fetch_one(&h.state.pool)
         .await
@@ -210,7 +222,7 @@ async fn takeover_sends_once_as_user_with_agent_marker() {
     assert_eq!(status, "sent");
     due(&h).await;
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     {
         let f = f.lock().unwrap();
         assert_eq!(f.sent.len(), 1);
@@ -276,8 +288,8 @@ async fn takeover_silences_unmatched_unsupported_changed_and_uncertain_messages(
                 .await;
             assert_eq!(status, StatusCode::OK);
         }
-        takeover::step(&h.state).await.unwrap();
-        takeover::step(&h.state).await.unwrap();
+        takeover_step(&h.state).await.unwrap();
+        takeover_step(&h.state).await.unwrap();
         let status: String = sqlx::query_scalar("SELECT status FROM communication_takeover_jobs")
             .fetch_one(&h.state.pool)
             .await
@@ -422,7 +434,7 @@ async fn takeover_rechecks_inflight_settings_and_knowledge() {
         f.lock().unwrap().review_gate = Some(gate.clone());
         communications::sync::step(&h.state).await.unwrap();
         let state = h.state.clone();
-        let work = tokio::spawn(async move { takeover::step(&state).await.unwrap() });
+        let work = tokio::spawn(async move { takeover_step(&state).await.unwrap() });
         tokio::time::timeout(Duration::from_secs(5), gate.arrived.notified())
             .await
             .unwrap();
@@ -537,7 +549,7 @@ async fn takeover_loads_multiple_questions_from_file_and_rejects_api_overrides()
         StatusCode::UNPROCESSABLE_ENTITY
     );
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     {
         let f = f.lock().unwrap();
         assert_eq!(f.decisions.len(), 1);
@@ -568,7 +580,7 @@ async fn takeover_invalid_file_pauses_without_interrupting_collection_and_recove
     enable(&h, &cookie).await;
     communications::sync::step(&h.state).await.unwrap();
     write_questions(&h, json!({"questions":["重复", "重复"]}));
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     let invalid = snapshot(&h, &cookie).await;
     assert_eq!(invalid["rules_error"], "takeover_rules_invalid");
     assert_eq!(invalid["topics"], json!([]));
@@ -596,7 +608,7 @@ async fn takeover_invalid_file_pauses_without_interrupting_collection_and_recove
     );
     assert!(f.lock().unwrap().decisions.is_empty());
     write_questions(&h, json!({"questions":["申请 novita 测试环境权限"]}));
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     let restored = snapshot(&h, &cookie).await;
     assert!(restored["rules_error"].is_null());
     assert!(restored["version"].as_i64().unwrap() > invalid["version"].as_i64().unwrap());
@@ -640,7 +652,7 @@ async fn takeover_excludes_unpublished_communication_and_personal_memory() {
     )
     .await;
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     let status: String = sqlx::query_scalar("SELECT status FROM communication_takeover_jobs")
         .fetch_one(&h.state.pool)
         .await
@@ -684,7 +696,7 @@ async fn takeover_self_chat_uses_external_flow_without_reply_loop() {
         .await
         .unwrap();
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     let job: Value =
         sqlx::query_scalar("SELECT message FROM communication_takeover_jobs WHERE status='sent'")
             .fetch_one(&h.state.pool)
@@ -710,7 +722,7 @@ async fn takeover_self_chat_uses_external_flow_without_reply_loop() {
     }
     due(&h).await;
     communications::sync::step(&h.state).await.unwrap();
-    takeover::step(&h.state).await.unwrap();
+    takeover_step(&h.state).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM communication_takeover_jobs")
             .fetch_one(&h.state.pool)
@@ -771,7 +783,7 @@ async fn takeover_self_chat_preserves_recipient_and_evidence_boundaries() {
         communications::sync::step(&h.state).await.unwrap();
         // 私人证据夹具也包含一条本人消息，最多推进两项候选后检查目标问题。
         for _ in 0..2 {
-            takeover::step(&h.state).await.unwrap();
+            takeover_step(&h.state).await.unwrap();
         }
         assert!(f.lock().unwrap().sent.is_empty(), "{scenario}");
         if ["other_chat", "old_message", "agent_notice"].contains(&scenario) {
@@ -795,7 +807,7 @@ async fn takeover_self_chat_preserves_recipient_and_evidence_boundaries() {
                 if scenario == "private_only" {
                     "no_evidence"
                 } else {
-                    "conversation_changed"
+                    "superseded"
                 }
             );
         }
@@ -858,4 +870,13 @@ async fn takeover_self_chat_binding_requires_verified_owner_and_current_settings
     assert_eq!(f.lock().unwrap().bindings.len(), count);
     server.abort();
     h.close().await;
+}
+
+/// 回拨隔离数据库的防抖截止时间；用于旧协议用例，真实计时另有完整轮次测试。
+async fn takeover_step(state: &AppState) -> Result<(), orbit_server::error::ApiError> {
+    sqlx::query("UPDATE communication_takeover_turns SET available_at=now()-interval '1 second'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    takeover::step(state).await
 }

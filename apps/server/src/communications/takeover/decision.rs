@@ -91,7 +91,7 @@ fn probability(value: &Value, key: &str) -> ApiResult<f64> {
 /// 一次请求独立判断所有允许的话题；多个话题都达标时保持静默，避免含糊路由。
 pub(super) async fn matching(
     state: &AppState,
-    message: &str,
+    input: Value,
     topics: &[String],
     threshold: f64,
 ) -> ApiResult<Option<(String, f64)>> {
@@ -105,12 +105,7 @@ pub(super) async fn matching(
             )
         })
         .collect();
-    let response = ask(
-        state,
-        json!({"incoming_message":message}),
-        Value::Object(questions),
-    )
-    .await?;
+    let response = ask(state, input, Value::Object(questions)).await?;
     let mut matches = vec![];
     for (i, topic) in topics.iter().enumerate() {
         let p = probability(&response, &format!("topic_{i}"))?;
@@ -126,10 +121,15 @@ pub(super) async fn matching(
 }
 /// 返回真实复核概率供队列持久化；阈值比较由调用方执行，不生成模型未提供的拒绝理由。
 pub(super) async fn review(state: &AppState, input: Value) -> ApiResult<f64> {
+    let policy = if input["reply_kind"] == "clarify" {
+        include_str!("../../../prompts/takeover_clarify_review.md")
+    } else {
+        REVIEW_PROMPT
+    };
     let response = ask(
         state,
         input,
-        json!({"answerable":{"type":"noul","instructions":REVIEW_PROMPT}}),
+        json!({"answerable":{"type":"noul","instructions":policy}}),
     )
     .await?;
     probability(&response, "answerable")

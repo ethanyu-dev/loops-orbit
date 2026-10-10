@@ -13,7 +13,7 @@ async fn review_diagnostics_preserve_draft_score_and_original_threshold() {
         enable(&h, &cookie).await;
         f.lock().unwrap().review_probability = score;
         communications::sync::step(&h.state).await.unwrap();
-        takeover::step(&h.state).await.unwrap();
+        takeover_step(&h.state).await.unwrap();
         // 用管理接口更改当前阈值，旧任务仍应展示执行当时的 0.9。
         let settings = snapshot(&h, &cookie).await;
         assert_eq!(h.request("PUT", "/api/communications/takeover", Some(&cookie), json!({"enabled":true,"threshold":0.95,"version":settings["version"],"rules_revision":settings["rules_revision"]})).await.0, StatusCode::OK);
@@ -79,7 +79,7 @@ async fn review_diagnostics_are_admin_only_and_survive_cancelled_review() {
     f.lock().unwrap().review_gate = Some(gate.clone());
     communications::sync::step(&h.state).await.unwrap();
     let state = h.state.clone();
-    let work = tokio::spawn(async move { takeover::step(&state).await.unwrap() });
+    let work = tokio::spawn(async move { takeover_step(&state).await.unwrap() });
     tokio::time::timeout(Duration::from_secs(5), gate.arrived.notified())
         .await
         .unwrap();

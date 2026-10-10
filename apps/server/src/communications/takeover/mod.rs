@@ -1,13 +1,17 @@
+mod context;
 mod decision;
 mod evidence;
 mod rules;
 mod self_chat;
+mod sessions;
 mod settings;
+mod turns;
 mod worker;
 
 pub use decision::Config;
+pub(super) use sessions::control;
 pub(super) use settings::{read, save};
-pub(super) use worker::enqueue;
+pub(super) use turns::enqueue;
 pub use worker::step;
 
 // 只在显式开启接管时缩短私聊轮询；非实时事件，实际延迟还取决于积压。
