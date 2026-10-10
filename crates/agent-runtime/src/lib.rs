@@ -17,6 +17,12 @@ const MAX_TOOL_CALLS: usize = 8;
 // 摘要输出独立限长，防止压缩后反而挤占近期对话。
 const MAX_SUMMARY_CHARS: usize = 6000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
+// SSE 包含逐 token 包装和推理事件，传输预算独立于保留内容的 1 MiB 上限。
+pub const DEFAULT_STREAM_MAX_BYTES: usize = 16 * 1_048_576;
+const MAX_STREAM_MAX_BYTES: usize = 64 * 1_048_576;
+// 网络故障只重试当前模型步骤，不重放已完成的工具调用。
+const CHAT_REQUEST_ATTEMPTS: usize = 3;
+const CHAT_RETRY_DELAY_MS: u64 = 250;
 // 聊天预算为推理和工具参数预留空间；单次恢复最多使用配置值的两倍。
 pub const DEFAULT_CHAT_OUTPUT_TOKENS: usize = 8192;
 // 限制配置范围，避免误填导致无限放大请求成本；恢复上限随之为 32768。
@@ -52,6 +58,8 @@ pub struct ModelConfig {
     pub stream_enabled: bool,
     /// 聊天每轮输出预算（256–16384）；长度截断时仅重试当前请求一次。
     pub chat_output_tokens: usize,
+    /// SSE 累计传输上限（1–64 MiB），独立于有效内容和单个事件限制。
+    pub stream_max_bytes: usize,
 }
 
 /// 持久化层交给执行器的已完成对话；工具消息由执行器在单次运行内维护。
@@ -93,6 +101,10 @@ impl Runtime {
         anyhow::ensure!(
             (256..=MAX_CHAT_OUTPUT_TOKENS).contains(&config.chat_output_tokens),
             "AGENT_CHAT_OUTPUT_TOKENS 必须在 256–16384 之间"
+        );
+        anyhow::ensure!(
+            (MAX_RESPONSE_BYTES..=MAX_STREAM_MAX_BYTES).contains(&config.stream_max_bytes),
+            "AGENT_STREAM_MAX_BYTES 必须在 1048576–67108864 之间"
         );
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
@@ -397,7 +409,7 @@ impl Runtime {
         .await
     }
 
-    /// 只重发长度截断的当前模型请求；已执行的工具结果留在上下文中，不重跑工具循环。
+    /// 网络与长度恢复只重发当前步骤，已提交工具结果留在原上下文中。
     async fn complete_chat(
         &self,
         messages: &[Value],
@@ -405,21 +417,41 @@ impl Runtime {
         tools: bool,
         extra: Vec<Value>,
     ) -> Result<Value, Failure> {
-        let budget = self.config.chat_output_tokens;
-        let result = self
-            .complete_extra(messages, progress, tools, extra.clone(), budget)
-            .await;
-        if !matches!(&result, Err(error) if error.code == "provider_output_limit") {
-            return result;
+        let mut budget = self.config.chat_output_tokens;
+        let mut expanded = false;
+        let mut attempts = 0;
+        loop {
+            let result = self
+                .complete_extra(messages, progress, tools, extra.clone(), budget)
+                .await;
+            let error = match result {
+                Ok(answer) => return Ok(answer),
+                Err(error) => error,
+            };
+            if error.code == "provider_output_limit" && !expanded {
+                expanded = true;
+                budget *= 2;
+            } else if error.retryable && attempts + 1 < CHAT_REQUEST_ATTEMPTS {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(CHAT_RETRY_DELAY_MS * attempts as u64))
+                    .await;
+            } else {
+                // 当前步骤已用尽恢复机会；持久化 worker 不得从头重放工具循环。
+                return Err(Failure {
+                    code: error.code,
+                    retryable: false,
+                });
+            }
+            if let Some(progress) = progress {
+                progress.send_replace(String::new());
+            }
+            tracing::warn!(
+                code = error.code,
+                max_tokens = budget,
+                retry = attempts,
+                "重试当前模型请求，保留已完成工具结果"
+            );
         }
-        // 丢弃第一份未完成正文及工具参数；它们既不入历史，也不与第二次结果拼接。
-        if let Some(progress) = progress {
-            progress.send_replace(String::new());
-        }
-        tracing::warn!(model = %self.config.model, max_tokens = budget, retry_max_tokens = budget * 2,
-            "模型输出达到上限，仅扩大当前请求预算重试一次");
-        self.complete_extra(messages, progress, tools, extra, budget * 2)
-            .await
     }
 
     /// 附加工具只在显式启用工具时公布，摘要和后台判断不会获得动作权限。
@@ -467,7 +499,7 @@ impl Runtime {
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with("text/event-stream"))
         {
-            let mut decoder = stream::Decoder::default();
+            let mut decoder = stream::Decoder::new(self.config.stream_max_bytes);
             let read_result = async {
                 while let Some(chunk) = response
                     .chunk()
@@ -482,6 +514,7 @@ impl Runtime {
                 Ok::<(), Failure>(())
             }
             .await;
+            decoder.log();
             decoder.metadata.log(&self.config.model, max_tokens);
             // 已明确超限或被过滤时，尾部 usage 的读取失败不能把它改成可重放整个任务的网络错误。
             decoder.metadata.validate()?;
@@ -638,6 +671,7 @@ mod tests {
             tools_enabled: true,
             stream_enabled: true,
             chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
+            stream_max_bytes: crate::DEFAULT_STREAM_MAX_BYTES,
         })
         .unwrap();
         assert_eq!(
@@ -679,6 +713,7 @@ mod tests {
             tools_enabled: true,
             stream_enabled: false,
             chat_output_tokens: crate::DEFAULT_CHAT_OUTPUT_TOKENS,
+            stream_max_bytes: crate::DEFAULT_STREAM_MAX_BYTES,
         })
         .unwrap();
         assert_eq!(

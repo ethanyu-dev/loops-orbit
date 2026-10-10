@@ -129,9 +129,11 @@
               "channel": {
                 "type": "string",
                 "enum": [
+                  "inherit",
                   "web",
                   "feishu"
-                ]
+                ],
+                "description": "默认 inherit：新建继承当前渠道，修改保留原目标。仅用户明确指定渠道时使用 web/feishu，并提供 channel_evidence。"
               }
             },
             "required": [
@@ -140,13 +142,16 @@
               "timezone",
               "recurrence",
               "missed_policy",
-              "grace_minutes",
-              "channel"
+              "grace_minutes"
             ],
             "additionalProperties": false
           },
           "evidence": {
             "type": "string"
+          },
+          "channel_evidence": {
+            "type": "string",
+            "description": "显式指定渠道时，逐字引用本轮用户包含目标渠道的完整正向分句，以逗号、句号、分号或换行分隔；不得截掉否定词。默认继承时省略。"
           }
         },
         "required": [
@@ -306,9 +311,11 @@
               "channel": {
                 "type": "string",
                 "enum": [
+                  "inherit",
                   "web",
                   "feishu"
-                ]
+                ],
+                "description": "默认 inherit：新建继承当前渠道，修改保留原目标。仅用户明确指定渠道时使用 web/feishu，并提供 channel_evidence。"
               }
             },
             "required": [
@@ -317,13 +324,16 @@
               "timezone",
               "recurrence",
               "missed_policy",
-              "grace_minutes",
-              "channel"
+              "grace_minutes"
             ],
             "additionalProperties": false
           },
           "evidence": {
             "type": "string"
+          },
+          "channel_evidence": {
+            "type": "string",
+            "description": "显式指定渠道时，逐字引用本轮用户包含目标渠道的完整正向分句，以逗号、句号、分号或换行分隔；不得截掉否定词。默认继承时省略。"
           }
         },
         "required": [

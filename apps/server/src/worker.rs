@@ -231,7 +231,18 @@ async fn generate(
 /// 成功结果与回复队列在同一事务内提交；暂时故障指数退避，永久错误直接结束。
 async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
     let started = std::time::Instant::now();
-    let result = if job.attempts > MAX_ATTEMPTS {
+    // 进程中断后可能已提交工具结果；此时不重新运行用户动作。
+    let saved: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM todo_operations WHERE run_id=$1)")
+            .bind(job.id)
+            .fetch_one(&state.pool)
+            .await?;
+    let result = if saved {
+        Err(agent_runtime::Failure {
+            code: "reply_interrupted_after_save",
+            retryable: false,
+        })
+    } else if job.attempts > MAX_ATTEMPTS {
         Err(agent_runtime::Failure {
             code: "attempt_limit",
             retryable: false,
@@ -294,20 +305,21 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
             );
         }
         Err(error) => {
-            let retry = error.retryable && job.attempts < MAX_ATTEMPTS;
             let mut tx = state.pool.begin().await?;
             // 与发送和取消共用会话锁，让完成与改口具备明确的先后顺序。
             sqlx::query("SELECT id FROM conversations WHERE id=$1 FOR UPDATE")
                 .bind(job.conversation_id)
                 .execute(&mut *tx)
                 .await?;
+            let saved_reply = crate::todos::receipts::saved_reply(&mut tx, job.id).await?;
+            let retry = saved_reply.is_none() && error.retryable && job.attempts < MAX_ATTEMPTS;
             let updated = sqlx::query(
                 r#"
                 UPDATE runs
                 SET status = $3,
                     error = $4,
                     partial_content = '',
-                    phase = $3,
+                    phase = CASE WHEN $6 THEN 'saved_reply_failed' ELSE $3 END,
                     lease_until = NULL,
                     available_at = now() + make_interval(secs => $5),
                     finished_at = CASE WHEN $3 = 'failed' THEN now() ELSE NULL END
@@ -319,8 +331,16 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
             .bind(if retry { "queued" } else { "failed" })
             .bind(error.code)
             .bind(f64::from(2_i32.pow(job.attempts.min(5) as u32)))
+            .bind(saved_reply.is_some())
             .execute(&mut *tx)
             .await?;
+            if updated.rows_affected() > 0
+                && let Some(reply) = &saved_reply
+            {
+                // 网页与飞书读取同一份确定性回执；失败码仍保留在运行记录中。
+                sqlx::query("INSERT INTO messages(conversation_id,run_id,role,content) VALUES($1,$2,'assistant',$3) ON CONFLICT DO NOTHING")
+                    .bind(job.conversation_id).bind(job.id).bind(reply).execute(&mut *tx).await?;
+            }
             if !retry
                 && updated.rows_affected() > 0
                 && let Some(reply_to) = &job.reply_to
@@ -329,11 +349,11 @@ async fn process(state: &AppState, job: &Job) -> ApiResult<()> {
                     &mut tx,
                     job.id,
                     reply_to,
-                    match error.code {
+                    saved_reply.as_deref().unwrap_or(match error.code {
                         "provider_output_limit" => "模型输出达到上限，这次请求未能完成。请缩小问题范围后重试，或联系管理员调整输出预算。",
                         "provider_content_filtered" => "模型服务过滤了本次输出，请调整问题后重试。",
                         _ => "这次请求暂时无法完成，请稍后重试。管理员可以在 Orbit 控制台查看失败状态。",
-                    },
+                    }),
                 )
                 .await?;
             }

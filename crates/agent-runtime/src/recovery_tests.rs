@@ -45,6 +45,9 @@ impl Fixture {
                     }
                     seen.lock().unwrap().push(body);
                     let (mime, text) = queue.lock().unwrap().pop_front().expect("发生了额外请求");
+                    if mime == "fixture/503" {
+                        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, text).into_response();
+                    }
                     ([(axum::http::header::CONTENT_TYPE, mime)], text).into_response()
                 }
             }),
@@ -61,6 +64,7 @@ impl Fixture {
             tools_enabled: true,
             stream_enabled: true,
             chat_output_tokens: DEFAULT_CHAT_OUTPUT_TOKENS,
+            stream_max_bytes: crate::DEFAULT_STREAM_MAX_BYTES,
         })
         .unwrap();
         Self {
@@ -256,6 +260,7 @@ fn validates_chat_budget() {
             tools_enabled: false,
             stream_enabled: false,
             chat_output_tokens: budget,
+            stream_max_bytes: crate::DEFAULT_STREAM_MAX_BYTES,
         });
         assert_eq!(runtime.is_ok(), valid);
     }
@@ -315,6 +320,72 @@ async fn conversation_style_is_shared_without_sharing_owner_authority() {
     assert!(delegated.contains("answer 为 null"));
     assert!(requests[1].get("tools").is_none());
     assert!(requests[2].get("tools").is_none());
+}
+
+// 验证网络恢复保留同一模型步骤及已完成工具结果；503/截断流为本地夹具，不覆盖公网稳定性。
+#[tokio::test]
+async fn transient_recovery_keeps_committed_tool_context() {
+    for failure_response in [
+        ("fixture/503", "unavailable".into()),
+        (
+            "text/event-stream",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n".into(),
+        ),
+    ] {
+        let fixture = Fixture::new(
+            vec![
+                answer(
+                    "tool_calls",
+                    call("tools_load", r#"{"names":["fixture_write"]}"#),
+                ),
+                answer("tool_calls", call("fixture_write", "{}")),
+                failure_response,
+                answer("stop", json!({"content":"已保存"})),
+            ],
+            None,
+        )
+        .await;
+        let host = WriteHost(AtomicUsize::new(0));
+        assert_eq!(
+            fixture
+                .runtime
+                .run_with_tools(&[], None, Some(&host))
+                .await
+                .unwrap(),
+            "已保存"
+        );
+        assert_eq!(host.0.load(Ordering::SeqCst), 1);
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[2], requests[3]);
+    }
+}
+
+// 验证网络恢复耗尽后不请求 worker 重放整轮；工具写入仅为计数，持久化回执由集成测试覆盖。
+#[tokio::test]
+async fn exhausted_step_never_requests_whole_run_replay() {
+    let mut responses = vec![
+        answer(
+            "tool_calls",
+            call("tools_load", r#"{"names":["fixture_write"]}"#),
+        ),
+        answer("tool_calls", call("fixture_write", "{}")),
+    ];
+    responses.extend((0..CHAT_REQUEST_ATTEMPTS).map(|_| ("fixture/503", "unavailable".into())));
+    let fixture = Fixture::new(responses, None).await;
+    let host = WriteHost(AtomicUsize::new(0));
+    let error = fixture
+        .runtime
+        .run_with_tools(&[], None, Some(&host))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "provider_rejected");
+    assert!(!error.retryable);
+    assert_eq!(host.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        2 + CHAT_REQUEST_ATTEMPTS
+    );
 }
 
 // 验证代答格式失败仅重新起草一次，不沿用错误散文、不启用工具；夹具不验证模型中文语义或实际外发。

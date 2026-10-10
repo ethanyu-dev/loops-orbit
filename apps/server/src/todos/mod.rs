@@ -1,5 +1,6 @@
 pub(crate) mod execution;
 pub mod identity;
+pub(crate) mod receipts;
 pub mod recurrence;
 mod resources;
 pub mod routes;
@@ -111,7 +112,8 @@ pub struct ScheduleInput {
     /// 提醒内容或后台只读整理要求。
     #[serde(default)]
     pub instruction: String,
-    /// web 或 feishu；修改安排时必须显式保留当前目标。
+    /// inherit 由后端继承来源或已有安排；网页可显式选择 web/feishu。
+    #[serde(default = "inherited_channel")]
     pub channel: String,
 }
 /// 每个安排独立暂停、改期与结束，待办可拥有多个安排。
@@ -158,4 +160,9 @@ pub struct Source<'a> {
     pub operation_key: String,
     /// 工具宿主创建时的本人绑定版本。
     pub identity_version: Option<i64>,
+}
+
+/// 省略渠道与显式 inherit 具有相同语义，兼容旧网页的显式选择。
+fn inherited_channel() -> String {
+    "inherit".into()
 }
