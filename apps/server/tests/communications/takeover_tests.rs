@@ -216,9 +216,15 @@ async fn takeover_sends_once_as_user_with_agent_marker() {
         assert_eq!(f.sent.len(), 1);
         assert_eq!(f.decisions.len(), 2);
         let content: Value = serde_json::from_str(f.sent[0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(f.sent[0]["msg_type"], "interactive");
+        assert_eq!(content["schema"], "2.0");
         assert_eq!(
-            content["text"],
-            "[Agent 自动回复]\n请提交申请表，填写测试用途，由环境管理员审核。"
+            content["body"]["elements"][0]["content"],
+            "[Agent 自动回复]"
+        );
+        assert_eq!(
+            content["body"]["elements"][1]["content"],
+            "请提交申请表，填写测试用途，由环境管理员审核。"
         );
         assert!(f.sent[0]["uuid"].as_str().is_some());
     }
@@ -700,6 +706,7 @@ async fn takeover_self_chat_uses_external_flow_without_reply_loop() {
         assert_eq!(f.decisions.len(), 2);
         f.message["message_id"] = json!("om_agent_reply");
         f.message["body"]["content"] = f.sent[0]["content"].clone();
+        f.message["msg_type"] = f.sent[0]["msg_type"].clone();
     }
     due(&h).await;
     communications::sync::step(&h.state).await.unwrap();

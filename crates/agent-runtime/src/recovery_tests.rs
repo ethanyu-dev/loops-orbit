@@ -260,3 +260,59 @@ fn validates_chat_budget() {
         assert_eq!(runtime.is_ok(), valid);
     }
 }
+
+// 验证三种身份实际发给模型的共享表达规则与独立权限/输出约束；固定模型响应不验证真实语言质量。
+#[tokio::test]
+async fn conversation_style_is_shared_without_sharing_owner_authority() {
+    let fixture = Fixture::new(
+        vec![
+            answer("stop", json!({"content":"你好。"})),
+            answer("stop", json!({"content":"不客气。"})),
+            answer(
+                "stop",
+                json!({"content":"{\"answer\":null,\"citations\":[]}"}),
+            ),
+        ],
+        None,
+    )
+    .await;
+    let history = vec![Message {
+        role: "user".into(),
+        content: "你好".into(),
+    }];
+    fixture
+        .runtime
+        .run_for_audience(&history, None, None, false)
+        .await
+        .unwrap();
+    fixture
+        .runtime
+        .run_for_audience(&history, None, None, true)
+        .await
+        .unwrap();
+    fixture
+        .runtime
+        .takeover_answer(&json!({"incoming_message":"如何申请","evidence":[]}))
+        .await
+        .unwrap();
+    let requests = fixture.requests.lock().unwrap();
+    for request in requests.iter() {
+        assert!(
+            request["messages"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains(CONVERSATION_STYLE)
+        );
+    }
+    let owner = requests[0]["messages"][0]["content"].as_str().unwrap();
+    let external = requests[1]["messages"][0]["content"].as_str().unwrap();
+    let delegated = requests[2]["messages"][0]["content"].as_str().unwrap();
+    assert!(owner.contains(SYSTEM_PROMPT));
+    assert!(!external.contains(SYSTEM_PROMPT));
+    assert!(!delegated.contains(SYSTEM_PROMPT));
+    assert!(external.contains("已发布通用知识"));
+    assert!(delegated.contains("只返回 JSON"));
+    assert!(delegated.contains("answer 为 null"));
+    assert!(requests[1].get("tools").is_none());
+    assert!(requests[2].get("tools").is_none());
+}

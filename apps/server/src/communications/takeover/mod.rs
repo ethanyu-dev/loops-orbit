@@ -12,8 +12,8 @@ pub use worker::step;
 
 // 只在显式开启接管时缩短私聊轮询；非实时事件，实际延迟还取决于积压。
 pub(super) const POLL_SECONDS: i64 = 15;
-// 标识单独占一行，由服务端添加，不能让模型决定是否保留。
-const AGENT_PREFIX: &str = "[Agent 自动回复]\n";
+// 与消息呈现层共用标识，历史正文和新卡片都可识别。
+use crate::feishu::message::AGENT_PREFIX;
 // 过期消息保持静默，防止长时间停机后突然批量补发。
 const MAX_AGE_MS: i64 = 300_000;
 

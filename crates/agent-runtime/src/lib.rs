@@ -29,6 +29,13 @@ const COMMUNICATION_OUTPUT_TOKENS: usize = 8192;
 const SUMMARY_PROMPT: &str = include_str!("../prompts/summary.md");
 const MEMORY_PROMPT: &str = include_str!("../prompts/memory.md");
 const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
+// 三种回复路径共享表达习惯，场景提示词最后追加以保留身份、证据和输出约束。
+const CONVERSATION_STYLE: &str = include_str!("../prompts/conversation_style.md");
+
+/// 只组合表达与当前场景规则，不引入本人的历史、记忆或工具权限。
+fn conversational_prompt(scenario: &str) -> String {
+    format!("{CONVERSATION_STYLE}\n\n{scenario}")
+}
 
 /// 自研执行器的模型配置；密钥只存在服务端内存和环境变量中。
 #[derive(Clone)]
@@ -128,11 +135,11 @@ impl Runtime {
         host: Option<&dyn tools::Host>,
         external: bool,
     ) -> Result<String, Failure> {
-        let prompt = if external {
+        let prompt = conversational_prompt(if external {
             include_str!("../prompts/external_chat.md")
         } else {
             SYSTEM_PROMPT
-        };
+        });
         // 第三方仅使用已发布 RAG；即使全局启用工具，也不提供基础工具或发现入口。
         let tools_enabled = self.config.tools_enabled && !external;
         let mut messages = vec![json!({ "role": "system", "content": prompt })];
@@ -287,7 +294,7 @@ impl Runtime {
     /// 接管仅起草结构化答案，不继承管理员聊天工具或个人对话上下文。
     pub async fn takeover_answer(&self, input: &Value) -> Result<Value, Failure> {
         let messages = vec![
-            json!({"role":"system","content":include_str!("../prompts/takeover_answer.md")}),
+            json!({"role":"system","content":conversational_prompt(include_str!("../prompts/takeover_answer.md"))}),
             json!({"role":"user","content":input.to_string()}),
         ];
         let answer = self

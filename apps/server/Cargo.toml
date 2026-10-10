@@ -8,6 +8,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+pulldown-cmark.workspace = true
 agent-runtime = { path = "../../crates/agent-runtime" }
 anyhow.workspace = true
 chrono.workspace = true
